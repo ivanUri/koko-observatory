@@ -39,3 +39,11 @@ test("keeps pipeline and UI state outside React component state", async () => {
   await assert.rejects(access(new URL("../app/_sites-preview/SkeletonPreview.tsx", import.meta.url)));
   await assert.rejects(access(new URL("../app/_sites-preview/preview.css", import.meta.url)));
 });
+
+test("Internet Journey ends at the HTTP response boundary", async () => {
+  const data = await readFile(new URL("../src/journeys/internet/data.ts", import.meta.url), "utf8");
+  const panel = await readFile(new URL("../src/journeys/internet/internet-journey-panel.tsx", import.meta.url), "utf8");
+  assert.match(data, /Browser receives response/);
+  assert.match(panel, /Internet Journey stops here/);
+  assert.doesNotMatch(data, /HTML parsing|DOM construction|Event Loop|GPU/);
+});
