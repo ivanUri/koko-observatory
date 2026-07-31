@@ -36,7 +36,7 @@ function PulseEdge(props: EdgeProps) {
   return (
     <>
       <BaseEdge path={path} markerEnd={props.markerEnd} style={{ stroke: "#3b4350" }} />
-      <circle r="2.5" fill="#9d8cff">
+      <circle r="2.5" fill="#42d9a0">
         <animateMotion dur="1.8s" repeatCount="indefinite" path={path} />
       </circle>
     </>
@@ -79,7 +79,7 @@ export function ExecutionGraph() {
   }, [graphEdges, graphNodes, layout]);
 
   return (
-    <div className="h-[520px] overflow-hidden rounded-xl border border-white/[.07] bg-[#0b0d10]">
+    <div className="h-[520px] overflow-hidden rounded-[4px] border border-white/[.07] bg-[#0b0d10]">
       <ReactFlow
         nodes={nodes}
         edges={edges}
@@ -95,7 +95,7 @@ export function ExecutionGraph() {
           pannable
           zoomable
           maskColor="rgba(8,10,12,.78)"
-          nodeColor="#7669e7"
+          nodeColor="#42c997"
           className="!border !border-white/10 !bg-[#11141a]"
         />
         <Controls className="observatory-controls" />

@@ -1,7 +1,7 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { Activity, ArrowDownRight, ArrowUpRight, CircleDot, Clock3, Cpu, Database, Gauge, Network } from "lucide-react";
+import { Activity, ArrowDownRight, ArrowUpRight, CircleDot, Clock3, Cpu, Database, Gauge, Network, RefreshCw, Share2 } from "lucide-react";
 import { RealtimeChart } from "@/src/components/realtime-chart";
 import { useGraphStore, useNetworkStore, useReplayStore, useSelectionStore, useTelemetryStore } from "@/src/stores";
 
@@ -18,10 +18,10 @@ export function OverviewPanel() {
 
   return (
     <PanelFrame
-      eyebrow="Live session / velora-local-01"
-      title="Runtime overview"
-      description="One correlated view across browser execution, resources, and scheduling."
-      actions={<LivePill />}
+      eyebrow="Dashboards / Browser runtime"
+      title="Velora runtime monitor"
+      description="Live operational view across execution, resources, scheduling, and transport."
+      actions={<DashboardControls />}
     >
       <div className="metric-grid">
         <Metric label="Events ingested" value={formatNumber(total)} delta="+18.4%" icon={Activity} />
@@ -29,22 +29,50 @@ export function OverviewPanel() {
         <Metric label="Error signals" value={String(errors)} delta="0.07%" icon={CircleDot} />
         <Metric label="Worker load" value="38%" delta="healthy" positive icon={Cpu} />
       </div>
-      <div className="content-grid">
-        <section className="panel-card panel-card--wide">
+      <div className="monitor-grid">
+        <section className="panel-card monitor-panel monitor-panel--throughput">
           <CardHeader title="Event throughput" subtitle="Incremental ring buffer · 60 second window" icon={Gauge} />
           <RealtimeChart />
         </section>
-        <section className="panel-card">
+        <section className="panel-card monitor-panel monitor-panel--health">
           <CardHeader title="Runtime health" subtitle="Current execution profile" icon={Database} />
           <div className="health-stack">
-            <HealthRow label="Main thread" value="12.8 ms" tone="violet" width="42%" />
+            <HealthRow label="Main thread" value="12.8 ms" tone="primary" width="42%" />
             <HealthRow label="Scheduler queue" value="4 tasks" tone="blue" width="27%" />
             <HealthRow label="JS heap" value="84.2 MB" tone="mint" width="58%" />
             <HealthRow label="DOM nodes" value="12,481" tone="amber" width="36%" />
           </div>
         </section>
+        <section className="panel-card monitor-panel">
+          <CardHeader title="Event status" subtitle="Last 10,000 signals" icon={CircleDot} />
+          <div className="status-distribution">
+            <div className="status-ring"><span><strong>99.3%</strong><small>healthy</small></span></div>
+            <div className="status-legend">
+              <span><i className="legend-dot legend-dot--ok" />Normal <strong>9,931</strong></span>
+              <span><i className="legend-dot legend-dot--warn" />Warning <strong>54</strong></span>
+              <span><i className="legend-dot legend-dot--error" />Error <strong>15</strong></span>
+            </div>
+          </div>
+        </section>
+        <section className="panel-card monitor-panel">
+          <CardHeader title="Subsystem latency" subtitle="P95 by pipeline stage" icon={Cpu} />
+          <div className="subsystem-bars">
+            <SubsystemBar label="Network" value="128 ms" width="78%" />
+            <SubsystemBar label="JavaScript" value="42 ms" width="52%" />
+            <SubsystemBar label="Render" value="28 ms" width="38%" />
+            <SubsystemBar label="Scheduler" value="12 ms" width="22%" />
+          </div>
+        </section>
+        <section className="panel-card monitor-panel">
+          <CardHeader title="Resource pressure" subtitle="Current saturation" icon={Activity} />
+          <div className="gauge-stack">
+            <MiniGauge label="CPU" value="38%" tone="ok" />
+            <MiniGauge label="Memory" value="61%" tone="warn" />
+            <MiniGauge label="Queue" value="24%" tone="ok" />
+          </div>
+        </section>
       </div>
-      <section className="panel-card">
+      <section className="panel-card monitor-panel monitor-panel--events">
         <CardHeader title="Recent signals" subtitle="Normalized events from the telemetry pipeline" icon={Network} />
         <EventTable events={events.slice(-9).reverse()} />
       </section>
@@ -163,6 +191,18 @@ function CardHeader({ title, subtitle, icon: Icon }: { title: string; subtitle: 
 
 function HealthRow({ label, value, width, tone }: { label: string; value: string; width: string; tone: string }) {
   return <div className="health-row"><div><span>{label}</span><strong>{value}</strong></div><div className="health-bar"><span className={`health-bar__fill health-bar__fill--${tone}`} style={{ width }} /></div></div>;
+}
+
+function DashboardControls() {
+  return <div className="dashboard-controls"><LivePill /><button className="toolbar-button"><Clock3 size={13} />Last 5 minutes</button><button className="toolbar-button" aria-label="Refresh dashboard"><RefreshCw size={13} />5s</button><button className="icon-button" aria-label="Share dashboard"><Share2 size={14} /></button></div>;
+}
+
+function SubsystemBar({ label, value, width }: { label: string; value: string; width: string }) {
+  return <div className="subsystem-row"><div><span>{label}</span><strong>{value}</strong></div><div><span style={{ width }} /></div></div>;
+}
+
+function MiniGauge({ label, value, tone }: { label: string; value: string; tone: "ok" | "warn" }) {
+  return <div className={`mini-gauge mini-gauge--${tone}`}><span>{label}</span><strong>{value}</strong><div><i style={{ width: value }} /></div></div>;
 }
 
 function EventTable({ events, network }: { events: ReturnType<typeof useTelemetryStore.getState>["events"]; network?: boolean }) {

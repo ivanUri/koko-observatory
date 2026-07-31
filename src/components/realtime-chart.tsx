@@ -59,11 +59,11 @@ export function RealtimeChart() {
           data: rate,
           showSymbol: false,
           sampling: "lttb",
-          lineStyle: { color: "#8b7cff", width: 1.5 },
+          lineStyle: { color: "#42d9a0", width: 1.5 },
           areaStyle: {
             color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
-              { offset: 0, color: "rgba(139,124,255,.28)" },
-              { offset: 1, color: "rgba(139,124,255,0)" },
+              { offset: 0, color: "rgba(66,217,160,.26)" },
+              { offset: 1, color: "rgba(66,217,160,0)" },
             ]),
           },
         },

@@ -39,7 +39,7 @@ export function ConsolePanel() {
     void import("@xterm/xterm").then(({ Terminal }) => {
       if (disposed || !ref.current) return;
       terminal = new Terminal({
-        theme: { background: "#090b0e", foreground: "#bac2ce", cursor: "#8f7cff", green: "#56d0a2", red: "#e07c83" },
+        theme: { background: "#090b0e", foreground: "#bac2ce", cursor: "#42d9a0", green: "#56d0a2", red: "#e07c83" },
         fontFamily: "var(--font-geist-mono)",
         fontSize: 12,
         convertEol: true,

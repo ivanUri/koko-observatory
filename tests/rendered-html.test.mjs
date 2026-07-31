@@ -19,7 +19,7 @@ test("server-renders the Observatory product shell", async () => {
   assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
   const html = await response.text();
   assert.match(html, /<title>Velora Observatory<\/title>/i);
-  assert.match(html, /Runtime overview/);
+  assert.match(html, /Velora runtime monitor/);
   assert.match(html, /Event throughput/);
   assert.match(html, /Observatory plugins/);
   assert.doesNotMatch(html, /codex-preview|react-loading-skeleton/i);
