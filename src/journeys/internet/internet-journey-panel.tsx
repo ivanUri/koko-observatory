@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo } from "react";
+import { useEffect } from "react";
 import { Background, Controls, Handle, MarkerType, Position, ReactFlow, type NodeProps } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { ChevronDown, ChevronLeft, ChevronRight, CircleHelp, Globe2, Pause, Play, Search } from "lucide-react";
@@ -41,23 +41,24 @@ function JourneyCard({ data }: NodeProps) {
 }
 
 export function InternetJourneyPanel() {
-  const { cursor, playing, speed, mode, query, play, seek, setSpeed, setMode, setQuery } = useInternetJourneyStore();
+  const { cursor, playing, speed, mode, query, nodes: liveNodes, play, seek, setSpeed, setMode, setQuery } = useInternetJourneyStore();
+  const journeyNodes = liveNodes.length ? liveNodes : internetJourneyNodes;
   useEffect(() => {
     if (!playing) return;
     const timer = window.setInterval(() => {
       const current = useInternetJourneyStore.getState().cursor;
-      if (current >= internetJourneyNodes.length - 1) useInternetJourneyStore.getState().play(false);
+      if (current >= journeyNodes.length - 1) useInternetJourneyStore.getState().play(false);
       else useInternetJourneyStore.getState().seek(current + 1);
     }, 1000 / speed);
     return () => window.clearInterval(timer);
-  }, [playing, speed]);
+  }, [playing, speed, journeyNodes.length]);
 
-  const visible = useMemo(() => internetJourneyNodes.filter((node) =>
+  const visible = journeyNodes.filter((node) =>
     !query || `${node.title} ${node.description} ${node.metadata.raw ?? ""} ${node.metadata.summary.map((item) => `${item.label} ${item.value}`).join(" ")}`
-      .toLowerCase().includes(query.toLowerCase())), [query]);
+      .toLowerCase().includes(query.toLowerCase()));
   const nodes = visible.map((node) => ({
     id: node.id, type: "journey", data: { ...node, status: internetJourneyNodes.indexOf(node) < cursor ? "complete" : internetJourneyNodes.indexOf(node) === cursor ? "active" : "pending" },
-    position: { x: internetJourneyNodes.indexOf(node) * 330, y: 30 },
+    position: { x: journeyNodes.indexOf(node) * 330, y: 30 },
   }));
   const visibleIds = new Set(visible.map((node) => node.id));
   const edges = internetJourneyEdges.filter((edge) => visibleIds.has(edge.source) && visibleIds.has(edge.target)).map((edge, index) => ({

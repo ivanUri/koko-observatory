@@ -4,11 +4,12 @@ import { useEffect, useMemo } from "react";
 import { motion } from "framer-motion";
 import { Box, Clock3, Cpu, Settings, Sparkles, TerminalSquare } from "lucide-react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { DemoTransport } from "@/src/core/transport";
+import { DemoTransport, WebSocketTransport } from "@/src/core/transport";
 import { TelemetryPipeline } from "@/src/core/pipeline";
 import { observatoryBus } from "@/src/core/event-bus";
 import { getPlugin, plugins } from "@/src/plugins/registry";
 import { useGraphStore, useTelemetryStore, useUIStore } from "@/src/stores";
+import { useInternetJourneyStore } from "@/src/journeys/internet/store";
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { staleTime: 30_000, refetchOnWindowFocus: false } },
@@ -29,16 +30,21 @@ function ObservatoryRuntime() {
   const toggleSidebar = useUIStore((state) => state.toggleSidebar);
   const plugin = getPlugin(activePlugin);
   const ActivePanel = plugin.component;
-  const pipeline = useMemo(() => new TelemetryPipeline(new DemoTransport()), []);
+  const pipeline = useMemo(() => {
+    const endpoint = process.env.NEXT_PUBLIC_VELORA_TELEMETRY_URL;
+    return new TelemetryPipeline(endpoint ? new WebSocketTransport(endpoint) : new DemoTransport());
+  }, []);
 
   useEffect(() => {
     const unsubscribe = observatoryBus.on("snapshot", (snapshot) => {
       useTelemetryStore.getState().append(snapshot.events, snapshot.rates, snapshot.p95);
       useGraphStore.getState().update(snapshot.graphNodes, snapshot.graphEdges);
     });
+    const unsubscribeRaw = observatoryBus.on("raw", (events) => useInternetJourneyStore.getState().ingest(events));
     void pipeline.start();
     return () => {
       unsubscribe();
+      unsubscribeRaw();
       pipeline.stop();
     };
   }, [pipeline]);
