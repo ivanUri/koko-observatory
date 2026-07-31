@@ -2,18 +2,7 @@
 
 import { useEffect, useMemo } from "react";
 import { motion } from "framer-motion";
-import {
-  Bell,
-  Box,
-  ChevronDown,
-  Command,
-  Cpu,
-  Menu,
-  Search,
-  Settings,
-  Sparkles,
-  TerminalSquare,
-} from "lucide-react";
+import { Box, Clock3, Cpu, Settings, Sparkles, TerminalSquare } from "lucide-react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { DemoTransport } from "@/src/core/transport";
 import { TelemetryPipeline } from "@/src/core/pipeline";
@@ -69,9 +58,8 @@ function ObservatoryRuntime() {
     <div className={collapsed ? "observatory observatory--collapsed" : "observatory"}>
       <aside className="sidebar">
         <div className="brand">
-          <div className="brand-mark"><span /><span /><span /></div>
-          {!collapsed && <div><strong>Velora</strong><small>Observatory</small></div>}
-          <button className="icon-button sidebar-toggle" onClick={toggleSidebar} aria-label="Toggle sidebar"><Menu size={16} /></button>
+          {!collapsed && <div><strong>Velora Observatory</strong><small>Browser runtime monitor</small></div>}
+          <button className="sidebar-toggle" onClick={toggleSidebar} aria-label="Toggle sidebar">‹</button>
         </div>
         <nav className="nav-section" aria-label="Observatory plugins">
           {!collapsed && <span className="nav-label">Workspace</span>}
@@ -90,19 +78,10 @@ function ObservatoryRuntime() {
         </nav>
         <div className="sidebar-footer">
           <button className="nav-item"><Settings size={16} /><span>Settings</span></button>
-          {!collapsed && <div className="usage"><div><span>Local retention</span><strong>6.4 GB / 20 GB</strong></div><div className="usage-bar"><span /></div></div>}
+          {!collapsed && <><div className="runtime-control"><span><i />Live</span><strong>1s⌄</strong></div><div className="runtime-control"><span><Clock3 size={14} />Last 15 minutes</span><strong>⌄</strong></div></>}
         </div>
       </aside>
       <section className="main-shell">
-        <header className="topbar">
-          <button className="session-switcher"><span className="session-orb" /><span><small>Session</small><strong>velora-local-01</strong></span><ChevronDown size={14} /></button>
-          <div className="topbar-actions">
-            <button className="command-trigger"><Search size={14} /><span>Search telemetry…</span><kbd><Command size={11} />K</kbd></button>
-            <span className="connection"><i />Connected</span>
-            <button className="icon-button" aria-label="Notifications"><Bell size={16} /></button>
-            <div className="avatar">HV</div>
-          </div>
-        </header>
         <motion.div key={activePlugin} initial={{ opacity: 0, y: 5 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.18 }}>
           <ActivePanel />
         </motion.div>

@@ -1,7 +1,7 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { Activity, ArrowDownRight, ArrowUpRight, CircleDot, Clock3, Cpu, Database, Gauge, Network, RefreshCw, Share2 } from "lucide-react";
+import { Activity, CircleDot, Clock3, Cpu, Database, Gauge, Network, RefreshCw, Share2 } from "lucide-react";
 import { RealtimeChart } from "@/src/components/realtime-chart";
 import { useGraphStore, useNetworkStore, useReplayStore, useSelectionStore, useTelemetryStore } from "@/src/stores";
 
@@ -24,10 +24,12 @@ export function OverviewPanel() {
       actions={<DashboardControls />}
     >
       <div className="metric-grid">
-        <Metric label="Events ingested" value={formatNumber(total)} delta="+18.4%" icon={Activity} />
-        <Metric label="P95 latency" value={`${p95.toFixed(1)} ms`} delta="-6.2%" positive icon={Clock3} />
-        <Metric label="Error signals" value={String(errors)} delta="0.07%" icon={CircleDot} />
-        <Metric label="Worker load" value="38%" delta="healthy" positive icon={Cpu} />
+        <Metric label="Sessions" value={formatNumber(total)} delta="↑ 12.4%" positive icon={Activity} />
+        <Metric label="Active sessions" value="1,243" delta="↑ 8.7%" positive icon={Activity} />
+        <Metric label="Error rate" value={`${Math.max(.07, errors / Math.max(total, 1) * 100).toFixed(2)}%`} delta="↓ 18.6%" positive icon={CircleDot} />
+        <Metric label="P95 latency" value={`${p95.toFixed(0)} ms`} delta="↓ 11.3%" positive icon={Clock3} />
+        <Metric label="JS heap (P95)" value="128 MB" delta="↓ 6.1%" positive icon={Cpu} />
+        <Metric label="Crash rate" value="0.05%" delta="↓ 28.2%" positive icon={CircleDot} />
       </div>
       <div className="monitor-grid">
         <section className="panel-card monitor-panel monitor-panel--throughput">
@@ -182,7 +184,7 @@ function PanelFrame({ eyebrow, title, description, actions, children }: { eyebro
 }
 
 function Metric({ label, value, delta, positive, icon: Icon }: { label: string; value: string; delta: string; positive?: boolean; icon: typeof Activity }) {
-  return <article className="metric-card"><div className="metric-top"><span>{label}</span><Icon size={15} /></div><strong>{value}</strong><span className={positive ? "delta delta--positive" : "delta"}>{positive ? <ArrowDownRight size={12} /> : <ArrowUpRight size={12} />}{delta}</span></article>;
+  return <article className="metric-card"><div className="metric-top"><span>{label}</span><Icon size={13} /></div><strong>{value}</strong><span className={positive ? "delta delta--positive" : "delta"}>{delta}</span><span className="metric-spark">{[2,4,3,7,5,9,8,12,10,14].map((height, index) => <i key={index} style={{height}} />)}</span></article>;
 }
 
 function CardHeader({ title, subtitle, icon: Icon }: { title: string; subtitle: string; icon: typeof Activity }) {
