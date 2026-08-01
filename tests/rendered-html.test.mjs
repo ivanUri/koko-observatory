@@ -59,6 +59,26 @@ test("URL inspection is global and not duplicated in Internet Journey", async ()
   assert.doesNotMatch(journey, /Inspect URL/);
 });
 
+test("Console renders telemetry instead of a decorative command shell", async () => {
+  const tooling = await readFile(new URL("../src/components/tooling-panels.tsx", import.meta.url), "utf8");
+  assert.match(tooling, /Search console/);
+  assert.match(tooling, /Pause/);
+  assert.match(tooling, /Export JSONL/);
+  assert.match(tooling, /Open in Event Inspector/);
+  assert.match(tooling, /slice\(-1_000\)/);
+  assert.doesNotMatch(tooling, /velora-runtime — zsh|remote commands/);
+});
+
+test("Event Inspector selects real events and exposes typed evidence", async () => {
+  const tooling = await readFile(new URL("../src/components/tooling-panels.tsx", import.meta.url), "utf8");
+  assert.match(tooling, /Search inspector events/);
+  assert.match(tooling, /Causal relationships/);
+  assert.match(tooling, /Typed payload fields/);
+  assert.match(tooling, /parentId === selected\.id/);
+  assert.match(tooling, /useSelectionStore/);
+  assert.doesNotMatch(tooling, /request\.json|runtime\.config/);
+});
+
 test("Internet Journey ends at the HTTP response boundary", async () => {
   const data = await readFile(new URL("../src/journeys/internet/data.ts", import.meta.url), "utf8");
   const panel = await readFile(new URL("../src/journeys/internet/internet-journey-panel.tsx", import.meta.url), "utf8");
@@ -86,7 +106,8 @@ test("Internet Journey does not present missing measurements as zero millisecond
   assert.match(sink, /timing\.num_connects == 0 and timing\.connection_id >= 0/);
   assert.match(sink, /durationMeasurement\("tcp", 0, "measured", true\)/);
   assert.match(sink, /CURLINFO_QUEUE_TIME_T|queue_us/);
-  assert.match(sink, /failed and std\.mem\.eql\(u8, stage\.id, "received"\)/);
+  assert.match(sink, /const failed_stage:/);
+  assert.match(sink, /if \(index > failure_index\) break :blk "skipped"/);
 });
 
 test("Internet Journey snapshots completed transfers before connection release", async () => {

@@ -13,6 +13,7 @@ interface InternetJourneyState {
   recording: boolean;
   recordedEvents: TelemetryEvent[];
   revealedCount: number;
+  activeUrl?: string;
   expanded?: string;
   play: (playing: boolean) => void;
   seek: (cursor: number) => void;
@@ -29,7 +30,7 @@ interface InternetJourneyState {
 
 export const useInternetJourneyStore = create<InternetJourneyState>((set) => ({
   cursor: 0, playing: false, speed: 1, mode: "education", query: "",
-  phase: "idle", recording: false, recordedEvents: [], revealedCount: 0,
+  phase: "idle", recording: false, recordedEvents: [], revealedCount: 0, activeUrl: undefined,
   nodes: internetJourneyNodes,
   play: (playing) => set({ playing }),
   seek: (cursor) => set({ cursor: Math.max(0, Math.min(internetJourneyNodes.length - 1, cursor)) }),
@@ -88,7 +89,7 @@ export const useInternetJourneyStore = create<InternetJourneyState>((set) => ({
         node.metadata.measurement = "unavailable";
         node.metadata.summary = [{ label: "State", value: "Not reached because URL validation failed" }];
       }
-      return { nodes: next, phase: "error", cursor: 0, playing: false, revealedCount: next.length };
+      return { nodes: next, activeUrl: url, phase: "error", cursor: 0, playing: false, revealedCount: next.length };
     }
     for (const node of next) {
       if (node.id !== "url-input" && node.id !== "url-parse" && node.id !== "routing") {
@@ -99,7 +100,7 @@ export const useInternetJourneyStore = create<InternetJourneyState>((set) => ({
         node.metadata.measurement = node.id === "received" ? "boundary" : "unavailable";
       }
     }
-    return { nodes: next, phase: "running", cursor: 1, playing: false, revealedCount: 1 };
+    return { nodes: next, activeUrl: new URL(url).href, phase: "running", cursor: 1, playing: false, revealedCount: 1 };
   }),
   toggle: (id) => set((state) => ({ expanded: state.expanded === id ? undefined : id })),
   ingest: (events) => set((state) => {
@@ -107,6 +108,11 @@ export const useInternetJourneyStore = create<InternetJourneyState>((set) => ({
     for (const event of events) {
       if (event.kind !== "network") continue;
       const payload = event.payload as Record<string, unknown>;
+      if (typeof payload.requestedUrl === "string" && state.activeUrl) {
+        try {
+          if (new URL(payload.requestedUrl).href !== state.activeUrl) continue;
+        } catch { continue; }
+      }
       const stage = typeof payload.journeyStage === "string" ? payload.journeyStage : undefined;
       const node = stage ? next.find((candidate) => candidate.id === stage) : undefined;
       if (!node) continue;
@@ -134,34 +140,17 @@ export const useInternetJourneyStore = create<InternetJourneyState>((set) => ({
       }
       node.duration = event.duration;
       node.timestamp = event.timestamp;
-      node.status = event.status === "error" ? "error" : (event.status as string) === "skipped" ? "skipped" : "complete";
       node.metadata.estimated = false;
       const measurement = payload.measurement;
       node.metadata.measurement = measurement === "boundary" || measurement === "reused" || measurement === "unavailable" || measurement === "not-timed"
         ? measurement
         : event.duration > 0 ? "measured" : "unavailable";
+      node.status = event.status === "error"
+        ? "error"
+        : (event.status as string) === "skipped"
+          ? "skipped"
+          : node.metadata.measurement === "unavailable" ? "unavailable" : "complete";
       node.metadata.raw = JSON.stringify({ event, measurement: node.metadata.measurement }, null, 2);
-      if (event.status === "error") {
-        const failedIndex = next.findIndex((candidate) => candidate.id === node.id);
-        const payloadError = typeof payload.error === "string"
-          ? payload.error
-          : typeof payload.errorMessage === "string" ? payload.errorMessage : "Network operation failed";
-        node.metadata.summary = [
-          { label: "Failure", value: payloadError },
-          { label: "Stage", value: node.title },
-          ...node.metadata.summary.filter((item) => item.label !== "Failure" && item.label !== "Stage"),
-        ];
-        node.metadata.explanation = `${node.description} The operation failed here, so later network stages were not reached.`;
-        for (let index = failedIndex + 1; index < next.length; index += 1) {
-          const skipped = next[index];
-          skipped.status = "skipped";
-          skipped.duration = 0;
-          skipped.timestamp = 0;
-          skipped.metadata.estimated = false;
-          skipped.metadata.measurement = "unavailable";
-          skipped.metadata.summary = [{ label: "State", value: `Not reached: ${node.title} failed` }];
-        }
-      }
       const measured = node.metadata.measurement === "measured" ? `${event.duration.toFixed(3)} ms` : "Unavailable";
       const isHttp3 = payload.httpVersion === "h3";
       if (stage === "tcp" && isHttp3) {
@@ -242,6 +231,29 @@ export const useInternetJourneyStore = create<InternetJourneyState>((set) => ({
       if (typeof payload.responseBodyBytes === "number") node.metadata.summary = node.metadata.summary.map((item) => item.label === "Body size" ? { ...item, value: `${payload.responseBodyBytes} B` } : item);
       if (typeof payload.httpVersion === "string" && stage === "response") {
         node.metadata.summary = [...node.metadata.summary.filter((item) => item.label !== "HTTP version"), { label: "HTTP version", value: payload.httpVersion }];
+      }
+      if (event.status === "error") {
+        const failedIndex = next.findIndex((candidate) => candidate.id === node.id);
+        const payloadError = typeof payload.error === "string" ? payload.error
+          : typeof payload.errorMessage === "string" ? payload.errorMessage
+          : typeof payload.failureReason === "string" ? payload.failureReason : "Network operation failed";
+        node.metadata.summary = [
+          { label: "Failure", value: payloadError },
+          { label: "Failure stage", value: node.title },
+          { label: "URL", value: typeof payload.url === "string" ? payload.url : state.activeUrl ?? "Unavailable" },
+          { label: "Timestamp", value: new Date(event.timestamp).toISOString() },
+          ...node.metadata.summary.filter((item) => !["Failure", "Failure stage", "URL", "Timestamp"].includes(item.label)),
+        ];
+        node.metadata.explanation = `${node.description} The operation failed here, so later network stages were not reached.`;
+        for (let index = failedIndex + 1; index < next.length; index += 1) {
+          const skipped = next[index];
+          skipped.status = "skipped";
+          skipped.duration = 0;
+          skipped.timestamp = 0;
+          skipped.metadata.estimated = false;
+          skipped.metadata.measurement = "unavailable";
+          skipped.metadata.summary = [{ label: "State", value: `Not reached: ${node.title} failed` }];
+        }
       }
     }
     const failed = next.some((node) => node.status === "error");

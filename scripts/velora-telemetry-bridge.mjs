@@ -11,6 +11,8 @@ let offset = 0;
 let pending = "";
 let reading = false;
 let inspections = Promise.resolve();
+let inspectionSequence = 0;
+let activeInspection = null;
 
 const server = new WebSocketServer({ host: "127.0.0.1", port, path: "/telemetry" });
 server.on("connection", (socket) => {
@@ -20,15 +22,35 @@ server.on("connection", (socket) => {
     try {
       const command = JSON.parse(raw.toString());
       if (command?.type !== "inspect-url" || typeof command.url !== "string") return;
+      let requestedUrl;
+      try {
+        requestedUrl = new URL(command.url);
+        if (requestedUrl.protocol !== "http:" && requestedUrl.protocol !== "https:") throw new Error("Unsupported URL scheme");
+      } catch {
+        console.warn(`Velora inspect rejected invalid URL: ${command.url}`);
+        return;
+      }
       // Each SDK inspection launches a browser process. Serialize commands so
       // separate processes never append to the same JSONL file concurrently.
-      inspections = inspections.then(() => sdkFetch(command.url, {
-        format: "md",
-        binary: veloraBinary,
-        waitUntil: "load",
-        timeout: 90_000,
-      }))
-        .catch((error) => console.error("Velora SDK inspect failed:", error));
+      inspections = inspections.then(async () => {
+        await drain();
+        activeInspection = { id: `inspection-${++inspectionSequence}`, requestedUrl: requestedUrl.href };
+        await sdkFetch(command.url, {
+          format: "md",
+          binary: veloraBinary,
+          waitUntil: "load",
+          timeout: 90_000,
+        });
+        await drain();
+      })
+        .catch((error) => {
+          const reason = typeof error?.message === "string" ? error.message : "Unknown navigation error";
+          if (error?.code === "NAVIGATION_ERROR") {
+            console.warn(`Velora inspect stopped: ${reason} (${command.url})`);
+            return;
+          }
+          console.error("Velora SDK inspect failed:", error);
+        });
     } catch (error) {
       console.error("Invalid telemetry command:", error);
     }
@@ -37,14 +59,19 @@ server.on("connection", (socket) => {
 
 function broadcast(line) {
   if (!line.trim()) return;
+  let event;
   try {
-    JSON.parse(line);
+    event = JSON.parse(line);
   } catch {
     console.warn("Skipping malformed telemetry JSONL record");
     return;
   }
+  if (activeInspection && event && typeof event === "object") {
+    event.payload = { ...(event.payload ?? {}), inspectionId: activeInspection.id, requestedUrl: activeInspection.requestedUrl };
+  }
+  const payload = JSON.stringify(event);
   for (const socket of clients) {
-    if (socket.readyState === WebSocket.OPEN) socket.send(line);
+    if (socket.readyState === WebSocket.OPEN) socket.send(payload);
   }
 }
 

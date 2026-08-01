@@ -18,7 +18,8 @@ const edgeTypes = { journey: JourneyEdge };
 export function journeyDurationLabel(model: JourneyNode): string {
   if (model.status === "pending") return "—";
   if (model.status === "error") return "Failed";
-  if (model.status === "skipped" || model.metadata.measurement === "unavailable") return "Unavailable";
+  if (model.status === "skipped") return "Skipped";
+  if (model.status === "unavailable" || model.metadata.measurement === "unavailable") return "Unavailable";
   if (model.metadata.measurement === "reused") return "Reused";
   if (model.metadata.measurement === "not-timed") return "Not timed";
   if (model.metadata.measurement === "boundary") return "Boundary";
@@ -31,6 +32,48 @@ function measurementHint(model: JourneyNode): string {
   if (model.metadata.measurement === "reused") return "Connection reused, so the browser did not remeasure this phase.";
   if (model.metadata.measurement === "boundary") return "Lifecycle boundary, not a timed phase.";
   return model.status === "pending" ? "Awaiting telemetry." : "Measured from telemetry.";
+}
+
+function developerDetails(model: JourneyNode) {
+  let rawEvent: unknown;
+  try {
+    rawEvent = model.metadata.raw ? JSON.parse(model.metadata.raw) : undefined;
+  } catch {
+    rawEvent = model.metadata.raw;
+  }
+  const fieldMap: Record<string, string[]> = {
+    "url-input": ["url"], "url-parse": ["url"], queue: ["journeyStage", "measurement"],
+    cache: ["cacheDecision", "responseStatus", "etag", "age"], dns: ["primaryIp", "measurement"],
+    routing: ["primaryIp", "usedProxy"], proxy: ["usedProxy", "primaryIp"],
+    tcp: ["primaryIp", "connectionId", "numConnects", "connectionReused"],
+    tls: ["httpVersion", "connectionId", "connectionReused"],
+    request: ["method", "url", "redirectCount", "httpVersion"], redirect: ["redirectCount", "url"],
+    server: ["responseStatus", "server", "via", "httpVersion"],
+    response: ["responseStatus", "responseBodyBytes", "compressedSizeBytes", "uncompressedSizeBytes", "contentType", "contentEncoding", "cacheControl", "server", "etag"],
+    received: ["responseStatus", "responseBodyBytes", "responseMemoryBytes", "responseMemoryState"],
+  };
+  const event = rawEvent && typeof rawEvent === "object" && "event" in rawEvent ? (rawEvent as { event?: unknown }).event : undefined;
+  const payload = event && typeof event === "object" && "payload" in event ? (event as { payload?: unknown }).payload : undefined;
+  const relevantPayload = payload && typeof payload === "object"
+    ? Object.fromEntries((fieldMap[model.id] ?? []).filter((key) => key in payload).map((key) => [key, (payload as Record<string, unknown>)[key]]))
+    : undefined;
+  const eventIdentity = event && typeof event === "object" ? Object.fromEntries(["id", "name", "status", "sequence", "sessionId"].filter((key) => key in event).map((key) => [key, (event as Record<string, unknown>)[key]])) : undefined;
+  return JSON.stringify({
+    stage: {
+      id: model.id,
+      type: model.type,
+      status: model.status,
+      owner: model.type === "dns" || model.type === "connection" || model.type === "tls" ? "network transport" : model.type === "server" || model.type === "response" ? "HTTP transaction" : "browser request lifecycle",
+    },
+    timing: {
+      durationMs: model.duration,
+      timestamp: model.timestamp ? new Date(model.timestamp).toISOString() : null,
+      measurement: model.metadata.measurement,
+      estimated: model.metadata.estimated ?? false,
+    },
+    diagnostics: Object.fromEntries(model.metadata.summary.map((item) => [item.label, item.value])),
+    signal: eventIdentity ? { ...eventIdentity, payload: relevantPayload } : "No typed telemetry event has been received for this stage.",
+  }, null, 2);
 }
 
 function JourneyCard({ data }: NodeProps) {
@@ -53,7 +96,10 @@ function JourneyCard({ data }: NodeProps) {
         <h4>Common issues</h4><p>{model.metadata.issues.join(" ")}</p>
         <h4>Best practices</h4><p>{model.metadata.practices.join(" ")}</p>
         <a>{model.metadata.reference}</a>
-      </> : <pre>{model.metadata.raw ?? model.metadata.summary.map((item) => `${item.label}: ${item.value}`).join("\n")}</pre>}
+      </> : <>
+        <h4>Stage diagnostics</h4>
+        <pre>{developerDetails(model)}</pre>
+      </>}
     </div>}
     <Handle type="source" position={Position.Right} />
   </article>;
@@ -72,8 +118,8 @@ function JourneyEdge(props: EdgeProps) {
     targetY: targetY - dy / length * inset,
   };
   const [path] = getStraightPath(adjusted);
-  const edgeState = (props.data as { state?: "connected" | "failed" | "pending" } | undefined)?.state ?? "pending";
-  const active = edgeState === "connected" ? "#55d57d" : edgeState === "failed" ? "#ef6f78" : "#34404b";
+  const edgeState = (props.data as { state?: "connected" | "failed" | "skipped" | "pending" } | undefined)?.state ?? "pending";
+  const active = edgeState === "connected" ? "#55d57d" : edgeState === "failed" ? "#ef6f78" : edgeState === "skipped" ? "#704149" : "#34404b";
   return (
     <BaseEdge
       path={path}
@@ -117,24 +163,27 @@ export function InternetJourneyPanel() {
     return internetJourneyEdges.filter((edge) => visibleIds.has(edge.source) && visibleIds.has(edge.target)).map((edge, index) => {
       const source = journeyNodes.find((node) => node.id === edge.source);
       const target = journeyNodes.find((node) => node.id === edge.target);
-      const failed = source?.status === "error" || source?.status === "skipped" || target?.status === "error" || target?.status === "skipped";
-      const connected = !failed && (index < cursor || (source?.status === "complete" && target?.status === "complete"));
-      const state = failed ? "failed" : connected ? "connected" : "pending";
-      const color = state === "connected" ? "#55d57d" : state === "failed" ? "#ef6f78" : "#34404b";
+      const failed = source?.status === "error" || target?.status === "error";
+      const skipped = !failed && (source?.status === "skipped" || target?.status === "skipped");
+      const traversed = (status?: JourneyNode["status"]) => status === "complete" || status === "unavailable";
+      const connected = !failed && !skipped && (index < cursor || (traversed(source?.status) && traversed(target?.status)));
+      const state = failed ? "failed" : skipped ? "skipped" : connected ? "connected" : "pending";
+      const color = state === "connected" ? "#55d57d" : state === "failed" ? "#ef6f78" : state === "skipped" ? "#704149" : "#34404b";
       return {
         ...edge, type: "journey", data: { state }, animated: connected, markerEnd: { type: MarkerType.ArrowClosed, color, width: 14, height: 14 },
       };
     });
   }, [visible, journeyNodes, cursor]);
   const durations = useMemo(() => [
-    ["Queue", journeyNodes.find((node) => node.id === "queue")?.duration ?? 0],
-    ["DNS", journeyNodes.find((node) => node.id === "dns")?.duration ?? 0],
-    ["TCP", journeyNodes.find((node) => node.id === "tcp")?.duration ?? 0],
-    ["TLS", journeyNodes.find((node) => node.id === "tls")?.duration ?? 0],
-    ["Server", journeyNodes.find((node) => node.id === "server")?.duration ?? 0],
-    ["Transfer", journeyNodes.find((node) => node.id === "response")?.duration ?? 0],
+    ["Queue", journeyNodes.find((node) => node.id === "queue")],
+    ["DNS", journeyNodes.find((node) => node.id === "dns")],
+    ["TCP", journeyNodes.find((node) => node.id === "tcp")],
+    ["TLS", journeyNodes.find((node) => node.id === "tls")],
+    ["Server", journeyNodes.find((node) => node.id === "server")],
+    ["Transfer", journeyNodes.find((node) => node.id === "response")],
   ] as const, [journeyNodes]);
-  const totalDuration = durations.reduce((total, [, duration]) => total + duration, 0);
+  const totalDuration = durations.reduce((total, [, node]) => total + (node?.status === "skipped" ? 0 : node?.duration ?? 0), 0);
+  const failedNode = journeyNodes.find((node) => node.status === "error");
   const onNodeDragStop = useCallback((_: unknown, node: { id: string; position: { x: number; y: number } }) => {
     positions.current[node.id] = node.position;
   }, []);
@@ -144,7 +193,7 @@ export function InternetJourneyPanel() {
       <div><span><Globe2 size={14} /> Protocol learning module</span><h1>Internet Journey</h1><p>From URL input to the moment the browser receives an HTTP response.</p></div>
       <div className="journey-mode"><button className={mode === "education" ? "active" : ""} onClick={() => setMode("education")}>Educational</button><button className={mode === "developer" ? "active" : ""} onClick={() => setMode("developer")}>Developer</button></div>
     </header>
-    <div className="journey-legend"><span><i className="legend-dot legend-dot--ok" /> Measured</span><span><i className="legend-dot legend-dot--warn" /> Not timed means the stage exists but core does not attach a duration source yet</span><span><i className="legend-dot legend-dot--error" /> Unavailable means the browser layer cannot observe that signal</span></div>
+    <div className="journey-legend"><span><i className="legend-dot legend-dot--ok" /> Measured</span><span><i className="legend-dot legend-dot--warn" /> Not timed / unavailable</span><span><i className="legend-dot legend-dot--error" /> Failed</span><span><i className="legend-dot legend-dot--skipped" /> Skipped / not reached</span></div>
     <div className="journey-toolbar">
       <label><Search size={13} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search nodes, headers, DNS records, status…" /></label>
       <div className="journey-playback">
@@ -161,9 +210,9 @@ export function InternetJourneyPanel() {
     </section>
     <section className="journey-waterfall">
       <header><strong>Request waterfall</strong><span>Total <b>{totalDuration ? `${totalDuration.toFixed(3)} ms` : "Awaiting telemetry"}</b></span></header>
-      <div>{durations.map(([label, value]) => <span key={label}><small>{label}</small><i style={{ width: `${totalDuration ? Math.max(2, value / totalDuration * 100) : 2}%` }} /><b>{value ? `${value.toFixed(3)} ms` : "—"}</b></span>)}</div>
+      <div>{durations.map(([label, node]) => { const value = node?.duration ?? 0; const result = node?.status === "error" ? "Failed" : node?.status === "skipped" ? "Skipped" : value ? `${value.toFixed(3)} ms` : node?.status === "unavailable" ? "Unavailable" : "—"; return <span key={label} className={`journey-waterfall__row journey-waterfall__row--${node?.status ?? "pending"}`}><small>{label}</small><i style={{ width: `${totalDuration && value ? Math.max(2, value / totalDuration * 100) : 2}%` }} /><b>{result}</b></span>; })}</div>
     </section>
-    {phase === "error" && <footer className="journey-boundary journey-boundary--error"><strong>Journey stopped at URL validation.</strong><span>The request was not sent. Open the failed URL input node to inspect the validation error; all later stages are marked skipped.</span></footer>}
+    {phase === "error" && <footer className="journey-boundary journey-boundary--error"><strong>Journey stopped at {failedNode?.title ?? "an unknown stage"}.</strong><span>{failedNode?.id === "url-input" ? "The URL is invalid, so the request was not sent." : `Previous stages completed, but ${failedNode?.title ?? "the network operation"} failed. Later stages were not reached.`} Open the failed node for diagnostics.</span></footer>}
     {phase === "received" && revealedCount >= journeyNodes.length && <footer className="journey-boundary"><strong>Response received.</strong><span>Internet Journey stops here — no HTML, CSS, JavaScript, DOM, rendering, Event Loop or GPU processing.</span><button onClick={() => { window.location.href = "/browser-journey"; }}>Continue → Browser Journey</button></footer>}
     </>}
   </main>;

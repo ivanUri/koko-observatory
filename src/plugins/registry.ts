@@ -11,7 +11,7 @@ export const plugins: ObservatoryPlugin[] = [
   { id: "internet-journey", route: "/internet-journey", label: "Internet Journey", description: "URL to HTTP response", icon: Globe2, component: InternetJourneyPanel, badge: "New" },
   { id: "browser-journey", route: "/browser-journey", label: "Browser Journey", description: "Response to presented frame", icon: Cpu, component: BrowserJourneyPanel, badge: "New" },
   { id: "system-journey", route: "/system-journey", label: "System Journey", description: "OS and hardware execution", icon: MonitorCog, component: SystemJourneyPanel, badge: "New" },
-  { id: "timeline", route: "/timeline", label: "Timeline", description: "Indexed event timeline", icon: TimerReset, component: TimelinePanel },
+  { id: "timeline", route: "/timeline", label: "Global Timeline", description: "All normalized telemetry events", icon: TimerReset, component: TimelinePanel },
   { id: "graph", route: "/graph", label: "Execution graph", description: "Causal graph explorer", icon: GitBranch, component: GraphPanel, badge: "120" },
   { id: "network", route: "/network", label: "Network", description: "Requests and responses", icon: Network, component: NetworkPanel },
   { id: "replay", route: "/replay", label: "Replay", description: "Deterministic sessions", icon: Play, component: ReplayPanel },

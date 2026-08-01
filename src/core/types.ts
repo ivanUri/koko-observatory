@@ -33,6 +33,7 @@ export interface GraphEdgeModel {
   id: string;
   source: string;
   target: string;
+  relation?: "parent" | "sequence";
 }
 
 export interface WorkerSnapshot {

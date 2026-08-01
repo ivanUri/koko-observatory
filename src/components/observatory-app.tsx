@@ -115,7 +115,11 @@ function GlobalInspector() {
   const submit = (event: React.FormEvent) => {
     event.preventDefault();
     if (!url.trim() || inspecting) return;
+    useBrowserJourneyStore.getState().reset();
     useInternetJourneyStore.getState().setInputUrl(url);
+    if (useInternetJourneyStore.getState().phase === "error") {
+      useBrowserJourneyStore.getState().block("Internet Journey rejected the URL before a request could be sent.");
+    }
     useUIStore.getState().setInspecting(true);
     window.dispatchEvent(new CustomEvent("velora:inspect-url", { detail: url }));
   };

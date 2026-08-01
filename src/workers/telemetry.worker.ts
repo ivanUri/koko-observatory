@@ -27,7 +27,7 @@ self.onmessage = ({ data }: MessageEvent<{ type: "append"; batch: TelemetryEvent
     .map((event) => event.duration)
     .sort((a, b) => a - b);
   const graphSource = events.slice(-GRAPH_WINDOW);
-  const ids = new Set(graphSource.map((event) => event.id));
+  const graphEdges = buildGraphEdges(graphSource);
   const snapshot: WorkerSnapshot = {
     events: data.batch,
     rates,
@@ -39,15 +39,25 @@ self.onmessage = ({ data }: MessageEvent<{ type: "append"; batch: TelemetryEvent
       duration: event.duration,
       status: event.status,
     })),
-    graphEdges: graphSource
-      .filter((event) => event.parentId && ids.has(event.parentId))
-      .map((event) => ({
-        id: `${event.parentId}-${event.id}`,
-        source: event.parentId!,
-        target: event.id,
-      })),
+    graphEdges,
   };
   self.postMessage(snapshot);
 };
+
+function buildGraphEdges(source: TelemetryEvent[]) {
+  const ids = new Set(source.map((event) => event.id));
+  const causal = source.filter((event) => event.parentId && ids.has(event.parentId)).map((event) => ({ id: `parent:${event.parentId}-${event.id}`, source: event.parentId!, target: event.id, relation: "parent" as const }));
+  const causalPairs = new Set(causal.map((edge) => `${edge.source}->${edge.target}`));
+  const bySession = Map.groupBy(source, (event) => event.sessionId);
+  const sequence = [...bySession].flatMap(([sessionId, sessionEvents]) => {
+    const ordered = [...sessionEvents].sort((a,b) => a.sequence-b.sequence);
+    return ordered.slice(1).flatMap((event, index) => {
+      const previous = ordered[index];
+      if (!previous || causalPairs.has(`${previous.id}->${event.id}`)) return [];
+      return [{ id: `sequence:${sessionId}:${previous.id}-${event.id}`, source: previous.id, target: event.id, relation: "sequence" as const }];
+    });
+  });
+  return [...causal, ...sequence];
+}
 
 export {};

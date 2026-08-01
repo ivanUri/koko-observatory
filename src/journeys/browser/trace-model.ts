@@ -17,8 +17,9 @@ export function buildTrace(events: TelemetryEvent[]): BrowserTrace {
     const payload = event.payload as Record<string, unknown>;
     return { id: event.id, stage: typeof payload.browserStage === "string" ? payload.browserStage : event.kind, start: event.timestamp, duration: event.duration, process, thread, state: "measured" as const, event };
   });
-  const resources = events.filter((event) => event.kind === "network").map((event) => ({ id: event.id, url: String(event.payload.url ?? "Unknown"), type: String(event.payload.contentType ?? "resource"), duration: event.duration, cache: String(event.payload.cacheStatus ?? "Unavailable"), size: typeof event.payload.responseBodyBytes === "number" ? event.payload.responseBodyBytes : undefined }));
-  return { sessionId: events.at(-1)?.sessionId, events, spans, frames: [], resources };
+  const resources = events.filter((event) => event.kind === "network" && (typeof event.payload.resourceType === "string" || typeof event.payload.initiatorType === "string" || ["preload", "resource"].includes(String(event.payload.browserStage ?? "")))).map((event) => ({ id: event.id, url: String(event.payload.url ?? "Unknown"), type: String(event.payload.resourceType ?? event.payload.contentType ?? "resource"), duration: event.duration, cache: String(event.payload.cacheStatus ?? "Unavailable"), size: typeof event.payload.responseBodyBytes === "number" ? event.payload.responseBodyBytes : undefined }));
+  const frames = events.filter((event) => event.kind === "render" && ["frame", "present", "composite"].includes(String(event.payload.browserStage ?? event.name))).map((event) => ({ id: event.id, start: event.timestamp, duration: event.duration, spans: [], presented: String(event.payload.browserStage ?? event.name) === "frame" || String(event.payload.browserStage ?? event.name) === "present" }));
+  return { sessionId: events.at(-1)?.sessionId, events, spans, frames, resources };
 }
 
 export function browserCalls(events: TelemetryEvent[]): BrowserCall[] {

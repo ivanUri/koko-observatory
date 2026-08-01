@@ -1,9 +1,11 @@
 "use client";
 
 import dynamic from "next/dynamic";
+import { useMemo, useState } from "react";
 import { Activity, AlertTriangle, CircleDot, Clock3, Cpu, Database, Filter, Gauge, GitBranch, Network, RefreshCw, Share2 } from "lucide-react";
 import { RealtimeChart } from "@/src/components/realtime-chart";
 import { useGraphStore, useNetworkStore, useReplayStore, useSelectionStore, useTelemetryStore } from "@/src/stores";
+import type { ExecutionGraphMode } from "@/src/components/execution-graph";
 
 const ExecutionGraph = dynamic(
   () => import("@/src/components/execution-graph").then((module) => module.ExecutionGraph),
@@ -100,80 +102,121 @@ export function OverviewPanel() {
 export function TimelinePanel() {
   const events = useTelemetryStore((state) => state.events);
   const select = useSelectionStore((state) => state.select);
+  const selectedId = useSelectionStore((state) => state.eventId);
+  const [query, setQuery] = useState("");
+  const [kind, setKind] = useState("all");
+  const [status, setStatus] = useState("all");
+  const [journey, setJourney] = useState("all");
+  const [session, setSession] = useState("all");
+  const sessions = useMemo(() => [...new Set(events.map((event) => event.sessionId))], [events]);
+  const filtered = useMemo(() => events.filter((event) => {
+    const eventJourney = classifyJourney(event);
+    const text = `${event.name} ${event.kind} ${event.sessionId} ${String(event.payload.url ?? "")} ${String(event.payload.browserStage ?? event.payload.systemStage ?? event.payload.journeyStage ?? "")}`.toLowerCase();
+    return (kind === "all" || event.kind === kind) && (status === "all" || event.status === status) && (journey === "all" || eventJourney === journey) && (session === "all" || event.sessionId === session) && (!query || text.includes(query.toLowerCase()));
+  }), [events, journey, kind, query, session, status]);
+  const lanes = useMemo(() => [...new Set(filtered.map((event) => event.kind))], [filtered]);
+  const start = Math.min(...filtered.map((event) => event.timestamp), Date.now());
+  const end = Math.max(...filtered.map((event) => event.timestamp + event.duration), start + 1);
+  const range = Math.max(1, end - start);
+  const selected = filtered.find((event) => event.id === selectedId) ?? events.find((event) => event.id === selectedId);
+  const errors = filtered.filter((event) => event.status === "error").length;
+  const warnings = filtered.filter((event) => event.status === "warning").length;
+  const duration = filtered.reduce((sum, event) => sum + event.duration, 0);
+  const tick = (ratio: number) => formatTimelineOffset(range * ratio);
   return (
-    <PanelFrame eyebrow="Indexed timeline" title="Event timeline" description="Windowed, searchable event history with worker-built indexes.">
+    <PanelFrame eyebrow="Observatory / All telemetry" title="Global Telemetry Timeline" description="Chronological signals across Internet, Browser, System and runtime diagnostics.">
+      <section className="global-timeline-summary">
+        <article><span>Visible events</span><strong>{filtered.length.toLocaleString()}</strong><small>of {events.length.toLocaleString()} buffered</small></article>
+        <article><span>Measured duration</span><strong>{formatDuration(duration)}</strong><small>{formatTimelineOffset(range)} time range</small></article>
+        <article><span>Errors</span><strong className={errors ? "status-text--error" : "status-text--ok"}>{errors}</strong><small>{warnings} warnings</small></article>
+        <article><span>Sessions</span><strong>{new Set(filtered.map((event) => event.sessionId)).size}</strong><small>{lanes.length} active subsystems</small></article>
+      </section>
+      <section className="global-timeline-filters" aria-label="Timeline filters">
+        <label><span>Search</span><input className="search-input" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Event, URL, stage or session…"/></label>
+        <label><span>Journey</span><select className="select-control" value={journey} onChange={(event) => setJourney(event.target.value)}><option value="all">All journeys</option><option value="internet">Internet</option><option value="browser">Browser</option><option value="system">System</option><option value="runtime">Runtime</option></select></label>
+        <label><span>Kind</span><select className="select-control" value={kind} onChange={(event) => setKind(event.target.value)}><option value="all">All kinds</option>{[...new Set(events.map((event) => event.kind))].map((value) => <option key={value}>{value}</option>)}</select></label>
+        <label><span>Status</span><select className="select-control" value={status} onChange={(event) => setStatus(event.target.value)}><option value="all">All statuses</option><option value="ok">OK</option><option value="warning">Warning</option><option value="error">Error</option></select></label>
+        <label><span>Session</span><select className="select-control" value={session} onChange={(event) => setSession(event.target.value)}><option value="all">All sessions</option>{sessions.map((value) => <option key={value}>{value}</option>)}</select></label>
+        <button type="button" onClick={() => { setQuery(""); setKind("all"); setStatus("all"); setJourney("all"); setSession("all"); }}>Reset</button>
+      </section>
       <div className="timeline-shell">
         <div className="timeline-ruler">
-          {["0 ms", "200 ms", "400 ms", "600 ms", "800 ms", "1.0 s"].map((tick) => <span key={tick}>{tick}</span>)}
+          {[0, .2, .4, .6, .8, 1].map((ratio) => <span key={ratio}>{tick(ratio)}</span>)}
         </div>
         <div className="timeline-lanes">
-          {(["network", "javascript", "scheduler", "render", "dom"] as const).map((kind, lane) => (
-            <div className="timeline-lane" key={kind}>
-              <span className="timeline-label">{kind}</span>
+          {lanes.map((laneKind) => (
+            <div className="timeline-lane" key={laneKind}>
+              <span className="timeline-label">{laneKind}<small>{filtered.filter((event) => event.kind === laneKind).length}</small></span>
               <div className="timeline-track">
-                {events.filter((event) => event.kind === kind).slice(-28).map((event, index) => (
+                {filtered.filter((event) => event.kind === laneKind).map((event) => (
                   <button
                     type="button"
                     key={event.id}
                     onClick={() => select(event.id)}
-                    title={`${event.name} · ${event.duration}ms`}
-                    className={`timeline-span timeline-span--${event.status}`}
-                    style={{ left: `${(index * 13 + lane * 7) % 92}%`, width: `${Math.max(1.8, Math.min(10, event.duration / 18))}%` }}
+                    title={`${event.name} · ${event.duration.toFixed(3)} ms · ${classifyJourney(event)}`}
+                    className={`timeline-span timeline-span--${event.status} ${selectedId === event.id ? "timeline-span--selected" : ""}`}
+                    style={{ left: `${Math.max(0, (event.timestamp - start) / range * 100)}%`, width: `${Math.max(.25, Math.min(100, event.duration / range * 100))}%` }}
                   />
                 ))}
               </div>
             </div>
           ))}
+          {!filtered.length && <div className="empty-row">No telemetry matches the current filters.</div>}
         </div>
       </div>
-      <section className="panel-card"><EventTable events={events.slice(-14).reverse()} /></section>
+      <div className="global-timeline-layout">
+        <section className="panel-card global-timeline-events"><header><strong>Chronological events</strong><span>{filtered.length} matching signals</span></header><div className="event-table" role="table"><div className="event-row event-row--header" role="row"><span>Signal</span><span>Journey / kind</span><span>Time</span><span>Duration</span><span>Status</span></div>{filtered.length ? [...filtered].reverse().slice(0, 250).map((event) => <button type="button" className={`event-row global-event-row ${selectedId === event.id ? "global-event-row--selected" : ""}`} role="row" key={event.id} onClick={() => select(event.id)}><span><i className={`event-dot event-dot--${event.status}`}/>{event.name}</span><span><b>{classifyJourney(event)}</b><small>{event.kind}</small></span><span className="mono">+{formatTimelineOffset(event.timestamp-start)}</span><span className="mono">{event.duration.toFixed(3)} ms</span><span className={`status-text status-text--${event.status}`}>{event.status}</span></button>) : <div className="empty-row">No matching events.</div>}</div></section>
+        <aside className="panel-card global-timeline-detail">{selected ? <TimelineEventDetails event={selected} onClose={() => select(undefined)}/> : <div className="global-timeline-detail__empty"><CircleDot size={20}/><strong>Select an event</strong><span>Inspect timing, ownership, journey classification, relationships and the complete typed payload.</span></div>}</aside>
+      </div>
     </PanelFrame>
   );
 }
 
 export function GraphPanel() {
-  const layout = useGraphStore((state) => state.layout);
-  const setLayout = useGraphStore((state) => state.setLayout);
   const nodes = useGraphStore((state) => state.nodes);
   const edges = useGraphStore((state) => state.edges);
   const events = useTelemetryStore((state) => state.events);
   const selectedId = useSelectionStore((state) => state.eventId);
+  const [mode, setMode] = useState<ExecutionGraphMode>("causal");
+  const [sessionFilter, setSessionFilter] = useState("all");
+  const [kindFilter, setKindFilter] = useState("all");
+  const [statusFilter, setStatusFilter] = useState("all");
+  const [query, setQuery] = useState("");
   const selected = events.find((event) => event.id === selectedId);
-  const visibleNodes = nodes.slice(-160);
+  const sessions = [...new Set(events.map((event) => event.sessionId))];
+  const eventById = new Map(events.map((event) => [event.id, event]));
+  const visibleNodes = nodes.filter((node) => {
+    const event = eventById.get(node.id);
+    const text = `${node.label} ${node.kind} ${String(event?.payload.url ?? "")}`.toLowerCase();
+    return (sessionFilter === "all" || event?.sessionId === sessionFilter) && (kindFilter === "all" || node.kind === kindFilter) && (statusFilter === "all" || node.status === statusFilter) && (!query || text.includes(query.toLowerCase()));
+  }).slice(-300);
   const visibleIds = new Set(visibleNodes.map((node) => node.id));
   const visibleEdges = edges.filter((edge) => visibleIds.has(edge.source) && visibleIds.has(edge.target));
   const orphanNodes = visibleNodes.filter((node) => !visibleEdges.some((edge) => edge.source === node.id || edge.target === node.id));
   const errorNodes = visibleNodes.filter((node) => node.status === "error").length;
   const warningNodes = visibleNodes.filter((node) => node.status === "warning").length;
   const maxDepth = graphDepth(visibleNodes.map((node) => node.id), visibleEdges);
-  const causalCoverage = visibleNodes.length ? Math.round((visibleNodes.length - orphanNodes.length) / visibleNodes.length * 100) : 0;
-  const eventKinds = Array.from(new Set(visibleNodes.map((node) => node.kind)));
-
+  const parentEdges = visibleEdges.filter((edge) => edge.relation !== "sequence").length;
+  const sequenceEdges = visibleEdges.filter((edge) => edge.relation === "sequence").length;
   return (
     <PanelFrame
       eyebrow="Execution correlation"
       title="Causal execution graph"
       description="Parent/child telemetry relationships, stage ownership, failures, and unavailable causal signals."
-      actions={
-        <select className="select-control" value={layout} onChange={(event) => setLayout(event.target.value as typeof layout)}>
-          <option value="dagre">Dagre</option><option value="elk">ELK</option><option value="force">Force</option>
-          <option value="tree">Tree</option><option value="radial">Radial</option>
-        </select>
-      }
+      actions={<span className="graph-mode-note">Edges require explicit correlation IDs</span>}
     >
       <div className="graph-summary">
         <Metric label="Visible nodes" value={formatNumber(visibleNodes.length)} delta="last graph window" icon={GitBranch} />
-        <Metric label="Causal edges" value={formatNumber(visibleEdges.length)} delta={visibleEdges.length ? `${causalCoverage}% coverage` : "No parentId links"} icon={Share2} />
+        <Metric label="Connections" value={formatNumber(visibleEdges.length)} delta={`${parentEdges} causal · ${sequenceEdges} observed`} icon={Share2} />
         <Metric label="Max depth" value={visibleNodes.length ? String(maxDepth) : "—"} delta="derived from parent chain" icon={Activity} />
         <Metric label="Warnings" value={formatNumber(warningNodes)} delta={`${errorNodes} errors`} icon={AlertTriangle} />
       </div>
-      <div className="graph-toolbar">
-        <span><Filter size={13} />Signal kinds: {eventKinds.length ? eventKinds.join(", ") : "unavailable until telemetry arrives"}</span>
-        <span>{orphanNodes.length ? `${orphanNodes.length} orphan nodes without visible parent/child` : "All visible nodes are linked"}</span>
-      </div>
+      <div className="graph-mode-tabs">{(["causal", "session", "subsystems", "neighborhood"] as ExecutionGraphMode[]).map((value) => <button key={value} className={mode === value ? "active" : ""} onClick={() => setMode(value)}>{value === "session" ? "Session Tree" : value}</button>)}</div>
+      <div className="graph-filters"><label><span>Search</span><input className="search-input" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Event, URL or subsystem…"/></label><label><span>Session</span><select className="select-control" value={sessionFilter} onChange={(event) => setSessionFilter(event.target.value)}><option value="all">All sessions</option>{sessions.map((session) => <option key={session}>{session}</option>)}</select></label><label><span>Kind</span><select className="select-control" value={kindFilter} onChange={(event) => setKindFilter(event.target.value)}><option value="all">All kinds</option>{[...new Set(nodes.map((node) => node.kind))].map((kind) => <option key={kind}>{kind}</option>)}</select></label><label><span>Status</span><select className="select-control" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}><option value="all">All statuses</option><option value="ok">OK</option><option value="warning">Warning</option><option value="error">Error</option></select></label><button onClick={() => { setQuery(""); setSessionFilter("all"); setKindFilter("all"); setStatusFilter("all"); }}>Reset</button></div>
+      <div className="graph-toolbar"><span><Filter size={13}/>{mode === "causal" ? "Expandable Dagre causal flow · click +/− nodes" : mode === "session" ? "Expandable Dagre session hierarchy · click +/− nodes" : mode === "subsystems" ? "Aggregated correlated subsystem links" : selectedId ? "Two-hop parent/child neighborhood" : "Select a node to focus its neighborhood"}</span><span>{orphanNodes.length ? `${orphanNodes.length} orphan nodes without visible parent/child` : "All visible nodes are linked"}</span></div>
       <div className="graph-layout">
         <section className="graph-main">
-          {visibleNodes.length ? <ExecutionGraph /> : <GraphEmpty />}
+          {visibleNodes.length ? <ExecutionGraph mode={mode} nodeIds={visibleIds} selectedId={selectedId}/> : <GraphEmpty />}
         </section>
         <aside className="graph-side">
           <section className="panel-card graph-detail">
@@ -184,7 +227,8 @@ export function GraphPanel() {
             <CardHeader title="Causal signal quality" subtitle="What the core currently emits" icon={Database} />
             <div className="graph-quality">
               <QualityRow label="Node identity" value={visibleNodes.length ? "Available" : "Waiting"} ok={visibleNodes.length > 0} />
-              <QualityRow label="Parent links" value={visibleEdges.length ? "Available" : "Unavailable"} ok={visibleEdges.length > 0} />
+              <QualityRow label="Parent links" value={parentEdges ? `${parentEdges} explicit` : "Unavailable"} ok={parentEdges > 0} />
+              <QualityRow label="Session sequence" value={sequenceEdges ? `${sequenceEdges} observed` : "Unavailable"} ok={sequenceEdges > 0} />
               <QualityRow label="Cross-thread ownership" value={events.some((event) => event.payload.threadId || event.payload.threadName) ? "Available" : "Unavailable"} ok={events.some((event) => event.payload.threadId || event.payload.threadName)} />
               <QualityRow label="Function call edges" value={events.some((event) => event.payload.parentCallId) ? "Available" : "Unavailable"} ok={events.some((event) => event.payload.parentCallId)} />
             </div>
@@ -304,6 +348,31 @@ function GraphEventDetails({ event }: { event: ReturnType<typeof useTelemetrySto
   );
 }
 
+function TimelineEventDetails({ event, onClose }: { event: ReturnType<typeof useTelemetryStore.getState>["events"][number]; onClose: () => void }) {
+  const stage = event.payload.browserStage ?? event.payload.systemStage ?? event.payload.journeyStage ?? "Not attributed";
+  const owner = event.payload.processName ?? event.payload.processId ?? "Unavailable";
+  const thread = event.payload.threadName ?? event.payload.thread ?? event.payload.threadId ?? "Unavailable";
+  return <div className="timeline-event-detail">
+    <header><div><small>{classifyJourney(event)} · {event.kind}</small><strong>{event.name}</strong></div><button type="button" onClick={onClose}>Close</button></header>
+    <div className="timeline-event-detail__metrics">
+      <span><small>Status</small><b className={`status-text--${event.status}`}>{event.status}</b></span>
+      <span><small>Duration</small><b>{event.duration.toFixed(3)} ms</b></span>
+      <span><small>Sequence</small><b>#{event.sequence}</b></span>
+      <span><small>Stage</small><b>{String(stage)}</b></span>
+    </div>
+    <dl>
+      <div><dt>Event ID</dt><dd>{event.id}</dd></div>
+      <div><dt>Parent ID</dt><dd>{event.parentId ?? "Unavailable"}</dd></div>
+      <div><dt>Session</dt><dd>{event.sessionId}</dd></div>
+      <div><dt>Timestamp</dt><dd>{new Date(event.timestamp).toISOString()}</dd></div>
+      <div><dt>Process</dt><dd>{String(owner)}</dd></div>
+      <div><dt>Thread</dt><dd>{String(thread)}</dd></div>
+      <div><dt>URL</dt><dd>{String(event.payload.url ?? "Unavailable")}</dd></div>
+    </dl>
+    <h3>Typed payload</h3><pre>{JSON.stringify(event.payload, null, 2)}</pre>
+  </div>;
+}
+
 function QualityRow({ label, value, ok }: { label: string; value: string; ok: boolean }) {
   return <span><i className={ok ? "legend-dot legend-dot--ok" : "legend-dot legend-dot--warn"} />{label}<strong className={ok ? "status-text--ok" : "status-text--warning"}>{value}</strong></span>;
 }
@@ -313,6 +382,13 @@ function LivePill() { const status = useTelemetryStore((state) => state.status);
 function formatNumber(value: number) { return new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 }).format(value); }
 function percentile(values: number[], rank: number) { if (!values.length) return 0; const sorted = [...values].sort((a, b) => a - b); return sorted[Math.min(sorted.length - 1, Math.floor((sorted.length - 1) * rank))]; }
 function formatDuration(value: number) { return value > 0 ? `${value.toFixed(1)} ms` : "—"; }
+function formatTimelineOffset(value: number) { if (value >= 60_000) return `${(value / 60_000).toFixed(2)} min`; if (value >= 1000) return `${(value / 1000).toFixed(2)} s`; if (value >= 1) return `${value.toFixed(1)} ms`; return `${(value * 1000).toFixed(0)} µs`; }
+function classifyJourney(event: ReturnType<typeof useTelemetryStore.getState>["events"][number]) {
+  if (typeof event.payload.systemStage === "string" || event.kind === "memory") return "system";
+  if (typeof event.payload.browserStage === "string" || ["dom", "javascript", "render"].includes(event.kind)) return "browser";
+  if (typeof event.payload.journeyStage === "string" || event.kind === "network" || event.kind === "navigation") return "internet";
+  return "runtime";
+}
 function formatBytes(value: number) { if (value >= 1024 * 1024) return `${(value / (1024 * 1024)).toFixed(1)} MB`; if (value >= 1024) return `${(value / 1024).toFixed(1)} KB`; return `${value.toFixed(0)} B`; }
 function latestNumber(events: ReturnType<typeof useTelemetryStore.getState>["events"], ...keys: string[]) { for (let index = events.length - 1; index >= 0; index -= 1) { for (const key of keys) { const value = events[index].payload[key]; if (typeof value === "number" && Number.isFinite(value)) return value; } } return undefined; }
 function statusLabel(status: ReturnType<typeof useTelemetryStore.getState>["status"]) { return status === "live" ? "streaming" : status; }

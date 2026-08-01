@@ -1,4 +1,4 @@
-export type JourneyStatus = "complete" | "active" | "pending" | "skipped" | "error";
+export type JourneyStatus = "complete" | "active" | "pending" | "skipped" | "unavailable" | "error";
 export type JourneyMeasurement = "measured" | "reused" | "unavailable" | "not-timed" | "boundary";
 
 export interface JourneyDetail {
