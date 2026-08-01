@@ -46,3 +46,28 @@ events can enrich the journey by including `payload.journeyStage` (`dns`,
 `url`, `responseStatus`, and `responseBodyBytes`. The UI updates durations and
 metadata from those events in realtime. Without the variable, the existing
 local demo transport remains available for UI development.
+
+### End-to-end local run
+
+```bash
+mkdir -p .velora-observatory
+VELORA_INTERNET_JOURNEY_FILE="$PWD/.velora-observatory/internet-journey.jsonl" \
+  ./zig-out/bin/velora fetch https://example.com
+```
+
+Then run the forwarding bridge:
+
+```bash
+cd velora-observatory
+VELORA_INTERNET_JOURNEY_FILE="../.velora-observatory/internet-journey.jsonl" \
+  npm run telemetry:bridge
+```
+
+Finally start the UI:
+
+```bash
+NEXT_PUBLIC_VELORA_TELEMETRY_URL=ws://127.0.0.1:9223/telemetry npm run dev
+```
+
+Core owns the timing calculations. The bridge only forwards complete JSONL
+records and does not infer or modify measurements.

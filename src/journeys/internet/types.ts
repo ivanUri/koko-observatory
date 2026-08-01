@@ -1,4 +1,5 @@
-export type JourneyStatus = "complete" | "active" | "pending" | "skipped";
+export type JourneyStatus = "complete" | "active" | "pending" | "skipped" | "error";
+export type JourneyMeasurement = "measured" | "reused" | "unavailable" | "not-timed" | "boundary";
 
 export interface JourneyDetail {
   label: string;
@@ -22,6 +23,7 @@ export interface JourneyNode {
     reference: string;
     raw?: string;
     estimated?: boolean;
+    measurement?: JourneyMeasurement;
   };
 }
 

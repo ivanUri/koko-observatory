@@ -4,6 +4,7 @@ export interface Transport {
   readonly state: "idle" | "connecting" | "open" | "closed";
   connect(): Promise<void>;
   close(): void;
+  send?(payload: string): void;
   subscribe(handler: (payload: string | ArrayBuffer) => void): () => void;
 }
 
@@ -37,6 +38,7 @@ export class WebSocketTransport implements Transport {
     this.socket?.close();
     this.state = "closed";
   }
+  send(payload: string) { if (this.socket?.readyState === WebSocket.OPEN) this.socket.send(payload); }
 
   subscribe(handler: (payload: string | ArrayBuffer) => void) {
     this.listeners.add(handler);

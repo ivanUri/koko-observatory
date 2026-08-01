@@ -6,37 +6,34 @@ import {
   BaseEdge,
   Controls,
   Handle,
-  MarkerType,
   MiniMap,
   Position,
   ReactFlow,
-  getBezierPath,
+  getStraightPath,
   type EdgeProps,
   type NodeProps,
 } from "@xyflow/react";
 import dagre from "@dagrejs/dagre";
 import "@xyflow/react/dist/style.css";
-import { useGraphStore } from "@/src/stores";
+import { useGraphStore, useSelectionStore } from "@/src/stores";
 
 function TelemetryNode({ data }: NodeProps) {
   const model = data as { label: string; kind: string; duration: number; status: string };
   return (
-    <div className={`graph-node graph-node--${model.status}`}>
-      <Handle type="target" position={Position.Left} />
-      <span className="graph-node__kind">{model.kind}</span>
-      <strong>{model.label}</strong>
-      <span>{model.duration.toFixed(1)} ms</span>
-      <Handle type="source" position={Position.Right} />
+    <div className={`graph-node graph-node--${model.status}`} title={`${model.kind}: ${model.label} · ${model.duration.toFixed(1)} ms`}>
+      <Handle type="target" position={Position.Top} />
+      <span>{nodeInitial(model.label, model.kind)}</span>
+      <Handle type="source" position={Position.Bottom} />
     </div>
   );
 }
 
 function PulseEdge(props: EdgeProps) {
-  const [path] = getBezierPath(props);
+  const [path] = getStraightPath(props);
   return (
     <>
-      <BaseEdge path={path} markerEnd={props.markerEnd} style={{ stroke: "#3b4350" }} />
-      <circle r="2.5" fill="#42d9a0">
+      <BaseEdge path={path} style={{ stroke: "#72808d", strokeWidth: 1.15 }} />
+      <circle r="2" fill="#55d57d">
         <animateMotion dur="1.8s" repeatCount="indefinite" path={path} />
       </circle>
     </>
@@ -47,13 +44,14 @@ export function ExecutionGraph() {
   const graphNodes = useGraphStore((state) => state.nodes);
   const graphEdges = useGraphStore((state) => state.edges);
   const layout = useGraphStore((state) => state.layout);
+  const select = useSelectionStore((state) => state.select);
 
   const { nodes, edges } = useMemo(() => {
-    const visible = graphNodes.slice(-120);
+    const visible = graphNodes.slice(-160);
     const visibleIds = new Set(visible.map((node) => node.id));
     const engine = new dagre.graphlib.Graph().setDefaultEdgeLabel(() => ({}));
-    engine.setGraph({ rankdir: layout === "tree" ? "TB" : "LR", ranksep: 64, nodesep: 26 });
-    visible.forEach((node) => engine.setNode(node.id, { width: 168, height: 62 }));
+    engine.setGraph({ rankdir: "TB", ranksep: layout === "tree" ? 96 : 76, nodesep: 54 });
+    visible.forEach((node) => engine.setNode(node.id, { width: 48, height: 48 }));
     graphEdges
       .filter((edge) => visibleIds.has(edge.source) && visibleIds.has(edge.target))
       .forEach((edge) => engine.setEdge(edge.source, edge.target));
@@ -64,7 +62,7 @@ export function ExecutionGraph() {
         return {
           id: node.id,
           type: "telemetry",
-          position: { x: position.x, y: position.y },
+          position: { x: position.x - 24, y: position.y - 24 },
           data: { ...node },
         };
       }),
@@ -73,18 +71,18 @@ export function ExecutionGraph() {
         .map((edge) => ({
           ...edge,
           type: "pulse",
-          markerEnd: { type: MarkerType.ArrowClosed, color: "#3b4350" },
         })),
     };
   }, [graphEdges, graphNodes, layout]);
 
   return (
-    <div className="h-[520px] overflow-hidden rounded-[4px] border border-white/[.07] bg-[#0b0d10]">
+    <div className="graph-canvas">
       <ReactFlow
         nodes={nodes}
         edges={edges}
         nodeTypes={{ telemetry: TelemetryNode }}
         edgeTypes={{ pulse: PulseEdge }}
+        onNodeClick={(_, node) => select(node.id)}
         minZoom={0.08}
         maxZoom={2}
         fitView
@@ -102,4 +100,10 @@ export function ExecutionGraph() {
       </ReactFlow>
     </div>
   );
+}
+
+function nodeInitial(label: string, kind: string) {
+  const words = label.split(/[\s:._/-]+/).filter(Boolean);
+  const text = words.length > 1 ? `${words[0][0]}${words[1][0]}` : label.slice(0, 2) || kind.slice(0, 2);
+  return text.toUpperCase();
 }

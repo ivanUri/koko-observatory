@@ -1,18 +1,22 @@
-import { Activity, Braces, GitBranch, Globe2, Network, Play, TerminalSquare, TimerReset } from "lucide-react";
+import { Activity, Braces, Cpu, GitBranch, Globe2, MonitorCog, Network, Play, TerminalSquare, TimerReset } from "lucide-react";
 import type { ObservatoryPlugin } from "@/src/plugins/types";
 import { GraphPanel, NetworkPanel, OverviewPanel, ReplayPanel, TimelinePanel } from "@/src/components/panels";
 import { ConsolePanel, InspectorPanel } from "@/src/components/tooling-panels";
 import { InternetJourneyPanel } from "@/src/journeys/internet/internet-journey-panel";
+import { BrowserJourneyPanel } from "@/src/journeys/browser/browser-journey-panel";
+import { SystemJourneyPanel } from "@/src/journeys/system/system-journey-panel";
 
 export const plugins: ObservatoryPlugin[] = [
-  { id: "overview", label: "Overview", description: "Runtime health and metrics", icon: Activity, component: OverviewPanel },
-  { id: "internet-journey", label: "Internet Journey", description: "URL to HTTP response", icon: Globe2, component: InternetJourneyPanel, badge: "New" },
-  { id: "timeline", label: "Timeline", description: "Indexed event timeline", icon: TimerReset, component: TimelinePanel },
-  { id: "graph", label: "Execution graph", description: "Causal graph explorer", icon: GitBranch, component: GraphPanel, badge: "120" },
-  { id: "network", label: "Network", description: "Requests and responses", icon: Network, component: NetworkPanel },
-  { id: "replay", label: "Replay", description: "Deterministic sessions", icon: Play, component: ReplayPanel },
-  { id: "inspector", label: "Event inspector", description: "Structured payload editor", icon: Braces, component: InspectorPanel },
-  { id: "console", label: "Console", description: "Runtime diagnostics", icon: TerminalSquare, component: ConsolePanel },
+  { id: "overview", route: "/", label: "Overview", description: "Runtime health and metrics", icon: Activity, component: OverviewPanel },
+  { id: "internet-journey", route: "/internet-journey", label: "Internet Journey", description: "URL to HTTP response", icon: Globe2, component: InternetJourneyPanel, badge: "New" },
+  { id: "browser-journey", route: "/browser-journey", label: "Browser Journey", description: "Response to presented frame", icon: Cpu, component: BrowserJourneyPanel, badge: "New" },
+  { id: "system-journey", route: "/system-journey", label: "System Journey", description: "OS and hardware execution", icon: MonitorCog, component: SystemJourneyPanel, badge: "New" },
+  { id: "timeline", route: "/timeline", label: "Timeline", description: "Indexed event timeline", icon: TimerReset, component: TimelinePanel },
+  { id: "graph", route: "/graph", label: "Execution graph", description: "Causal graph explorer", icon: GitBranch, component: GraphPanel, badge: "120" },
+  { id: "network", route: "/network", label: "Network", description: "Requests and responses", icon: Network, component: NetworkPanel },
+  { id: "replay", route: "/replay", label: "Replay", description: "Deterministic sessions", icon: Play, component: ReplayPanel },
+  { id: "inspector", route: "/inspector", label: "Event inspector", description: "Structured payload editor", icon: Braces, component: InspectorPanel },
+  { id: "console", route: "/console", label: "Console", description: "Runtime diagnostics", icon: TerminalSquare, component: ConsolePanel },
 ];
 
 export function getPlugin(id: string) {

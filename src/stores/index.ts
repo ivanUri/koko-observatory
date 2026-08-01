@@ -8,7 +8,10 @@ interface TelemetryState {
   total: number;
   rate: Array<[number, number]>;
   p95: number;
+  status: "connecting" | "live" | "paused" | "offline";
+  lastEventAt?: number;
   append: (events: TelemetryEvent[], rate: Array<[number, number]>, p95: number) => void;
+  setStatus: (status: TelemetryState["status"]) => void;
 }
 
 export const useTelemetryStore = create<TelemetryState>((set) => ({
@@ -16,13 +19,17 @@ export const useTelemetryStore = create<TelemetryState>((set) => ({
   total: 0,
   rate: [],
   p95: 0,
+  status: "offline",
+  lastEventAt: undefined,
   append: (events, rate, p95) =>
     set((state) => ({
       events: [...state.events, ...events].slice(-MAX_VISIBLE_EVENTS),
       total: state.total + events.length,
       rate,
       p95,
+      lastEventAt: events.length ? events[events.length - 1].timestamp : state.lastEventAt,
     })),
+  setStatus: (status) => set({ status }),
 }));
 
 export const useGraphStore = create<{
@@ -54,16 +61,24 @@ export const useUIStore = create<{
   activePlugin: string;
   sidebarCollapsed: boolean;
   commandOpen: boolean;
+  inspectorUrl: string;
+  inspecting: boolean;
   setActivePlugin: (id: string) => void;
   toggleSidebar: () => void;
   setCommandOpen: (open: boolean) => void;
+  setInspectorUrl: (url: string) => void;
+  setInspecting: (inspecting: boolean) => void;
 }>((set) => ({
   activePlugin: "overview",
   sidebarCollapsed: false,
   commandOpen: false,
+  inspectorUrl: "https://example.com",
+  inspecting: false,
   setActivePlugin: (activePlugin) => set({ activePlugin }),
   toggleSidebar: () => set((state) => ({ sidebarCollapsed: !state.sidebarCollapsed })),
   setCommandOpen: (commandOpen) => set({ commandOpen }),
+  setInspectorUrl: (inspectorUrl) => set({ inspectorUrl }),
+  setInspecting: (inspecting) => set({ inspecting }),
 }));
 
 export const useSettingsStore = create<{

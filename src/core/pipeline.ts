@@ -27,6 +27,7 @@ export class TelemetryPipeline {
     await this.transport.connect();
     observatoryBus.emit("status", "live");
   }
+  send(payload: string) { this.transport.send?.(payload); }
 
   stop() {
     this.unsubscribe?.();

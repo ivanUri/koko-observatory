@@ -40,10 +40,61 @@ test("keeps pipeline and UI state outside React component state", async () => {
   await assert.rejects(access(new URL("../app/_sites-preview/preview.css", import.meta.url)));
 });
 
+test("Overview derives operational metrics from telemetry", async () => {
+  const panels = await readFile(new URL("../src/components/panels.tsx", import.meta.url), "utf8");
+  assert.match(panels, /latestNumber\(events/);
+  assert.match(panels, /percentile\(events/);
+  assert.match(panels, /No crash signal/);
+  assert.doesNotMatch(panels, /Active sessions.*1,243|JS heap \(P95\).*128 MB|Crash rate.*0\.05%/);
+});
+
+test("URL inspection is global and not duplicated in Internet Journey", async () => {
+  const [shell, journey] = await Promise.all([
+    readFile(new URL("../src/components/observatory-app.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../src/journeys/internet/internet-journey-panel.tsx", import.meta.url), "utf8"),
+  ]);
+  assert.match(shell, /GlobalInspector/);
+  assert.match(shell, /velora:inspect-url/);
+  assert.match(shell, /Global URL inspector/);
+  assert.doesNotMatch(journey, /Inspect URL/);
+});
+
 test("Internet Journey ends at the HTTP response boundary", async () => {
   const data = await readFile(new URL("../src/journeys/internet/data.ts", import.meta.url), "utf8");
   const panel = await readFile(new URL("../src/journeys/internet/internet-journey-panel.tsx", import.meta.url), "utf8");
   assert.match(data, /Browser receives response/);
+  assert.match(data, /Request queue/);
+  assert.match(data, /Cache decision/);
+  assert.match(data, /Proxy \/ tunnel/);
+  assert.match(data, /Redirect chain/);
   assert.match(panel, /Internet Journey stops here/);
   assert.doesNotMatch(data, /HTML parsing|DOM construction|Event Loop|GPU/);
+});
+
+test("Internet Journey does not present missing measurements as zero milliseconds", async () => {
+  const [panel, store, sink] = await Promise.all([
+    readFile(new URL("../src/journeys/internet/internet-journey-panel.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../src/journeys/internet/store.ts", import.meta.url), "utf8"),
+    readFile(new URL("../../src/runtime/network/InternetJourneySink.zig", import.meta.url), "utf8"),
+  ]);
+  assert.match(panel, /measurement === "unavailable"/);
+  assert.match(panel, /return "Not timed"/);
+  assert.match(panel, /return "Boundary"/);
+  assert.match(panel, /return "Reused"/);
+  assert.match(store, /event\.duration > 0 \? "measured" : "unavailable"/);
+  assert.match(sink, /\.measurement = "boundary"/);
+  assert.match(sink, /timing\.num_connects == 0 and timing\.connection_id >= 0/);
+  assert.match(sink, /durationMeasurement\("tcp", 0, "measured", true\)/);
+  assert.match(sink, /CURLINFO_QUEUE_TIME_T|queue_us/);
+  assert.match(sink, /failed and std\.mem\.eql\(u8, stage\.id, "received"\)/);
+});
+
+test("Internet Journey snapshots completed transfers before connection release", async () => {
+  const client = await readFile(new URL("../../src/core/browser/HttpClient.zig", import.meta.url), "utf8");
+  const emit = client.indexOf("transfer.emitInternetJourney(msg.conn, false)");
+  const release = client.indexOf("transfer.releaseConn()", emit);
+  assert.ok(emit >= 0, "terminal journey emission is missing");
+  assert.ok(release > emit, "the easy handle was released before its final timing snapshot");
+  assert.doesNotMatch(client, /Headers are the first point[\s\S]{0,500}emitInternetJourney/);
+  assert.match(client, /status == 204 or status == 304 or transfer\.req\.params\.method == \.HEAD/);
 });
