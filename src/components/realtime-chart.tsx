@@ -13,10 +13,11 @@ import { useTelemetryStore } from "@/src/stores";
 
 echarts.use([LineChart, GridComponent, TooltipComponent, DataZoomComponent, CanvasRenderer]);
 
-export function RealtimeChart() {
+export function RealtimeChart({ data }: { data?: Array<[number, number]> }) {
   const ref = useRef<HTMLDivElement>(null);
   const instance = useRef<echarts.ECharts | undefined>(undefined);
-  const rate = useTelemetryStore((state) => state.rate);
+  const storeRate = useTelemetryStore((state) => state.rate);
+  const rate = data ?? storeRate;
 
   useEffect(() => {
     if (!ref.current) return;
@@ -71,5 +72,5 @@ export function RealtimeChart() {
     });
   }, [rate]);
 
-  return <div ref={ref} className="h-[245px] w-full" aria-label="Realtime event throughput" />;
+  return <div className="realtime-chart"><div ref={ref} className="h-[245px] w-full" aria-label="Realtime event throughput" />{!rate.length && <span>No timestamped signals in this scope.</span>}</div>;
 }

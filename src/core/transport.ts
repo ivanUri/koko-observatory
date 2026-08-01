@@ -94,6 +94,9 @@ export class DemoTransport implements Transport {
       status: duration > 130 ? "error" : duration > 75 ? "warning" : "ok",
       parentId: sequence > 1 ? `evt-${Math.max(1, sequence - (sequence % 5 || 1))}` : undefined,
       payload: {
+        demo: true,
+        inspectionId: "demo-session",
+        requestedUrl: "Demo telemetry",
         url: kind === "network" ? `/api/runtime/${sequence % 12}` : undefined,
         frameId: "frame-main",
         realmEpoch: Math.floor(sequence / 80) + 1,

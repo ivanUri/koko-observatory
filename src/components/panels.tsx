@@ -1,11 +1,13 @@
 "use client";
 
 import dynamic from "next/dynamic";
+import Link from "next/link";
 import { useMemo, useState } from "react";
-import { Activity, AlertTriangle, CircleDot, Clock3, Cpu, Database, Filter, Gauge, GitBranch, Network, RefreshCw, Share2 } from "lucide-react";
+import { Activity, AlertTriangle, CircleDot, Clock3, Cpu, Database, Filter, Gauge, GitBranch, Network, Wifi, X } from "lucide-react";
 import { RealtimeChart } from "@/src/components/realtime-chart";
 import { useGraphStore, useNetworkStore, useReplayStore, useSelectionStore, useTelemetryStore } from "@/src/stores";
 import type { ExecutionGraphMode } from "@/src/components/execution-graph";
+import type { TelemetryEvent } from "@/src/core/types";
 
 const ExecutionGraph = dynamic(
   () => import("@/src/components/execution-graph").then((module) => module.ExecutionGraph),
@@ -13,53 +15,74 @@ const ExecutionGraph = dynamic(
 );
 
 export function OverviewPanel() {
-  const p95 = useTelemetryStore((state) => state.p95);
   const events = useTelemetryStore((state) => state.events);
   const status = useTelemetryStore((state) => state.status);
-  const errors = events.filter((event) => event.status === "error").length;
-  const warnings = events.filter((event) => event.status === "warning").length;
-  const sessions = new Set(events.map((event) => event.sessionId)).size;
-  const recentCutoff = Date.now() - 60_000;
-  const activeSessions = new Set(events.filter((event) => event.timestamp >= recentCutoff).map((event) => event.sessionId)).size;
-  const heap = latestNumber(events, "heapUsedBytes", "jsHeapBytes");
-  const domNodes = latestNumber(events, "domNodes");
-  const cpu = latestNumber(events, "cpuPercent");
-  const queue = latestNumber(events, "queueDepth");
-  const stageP95 = (kind: typeof events[number]["kind"]) => formatDuration(percentile(events.filter((event) => event.kind === kind).map((event) => event.duration), .95));
-  // Status counts are derived from the visible ring-buffer window. `total` is
-  // cumulative and must not be used as the denominator for these windowed
-  // counts once the buffer has rolled over.
-  const statusTotal = Math.max(events.length, 1);
-  const healthy = Math.max(0, events.length - errors - warnings);
-  const hasTelemetry = events.length > 0;
+  const [range, setRange] = useState("5m");
+  const [inspection, setInspection] = useState("latest");
+  const inspections = useMemo(() => [...new Map(events.flatMap((event) => {
+    const id = stringPayload(event.payload, "inspectionId");
+    return id ? [[id, stringPayload(event.payload, "requestedUrl") ?? id] as const] : [];
+  })).entries()].reverse(), [events]);
+  const latestInspection = inspections[0]?.[0];
+  const scoped = useMemo(() => {
+    const now = events.at(-1)?.timestamp ?? Date.now();
+    const cutoff = range === "all" ? 0 : now - ({ "1m": 60_000, "5m": 300_000, "15m": 900_000 }[range] ?? 300_000);
+    const selected = inspection === "latest" ? latestInspection : inspection === "all" ? undefined : inspection;
+    return events.filter((event) => event.timestamp >= cutoff && (!selected || event.payload.inspectionId === selected));
+  }, [events, inspection, latestInspection, range]);
+  const lifecycle = [...scoped].reverse().find((event) => typeof event.payload.inspectionState === "string");
+  const measured = scoped.filter(isMeasuredEvent);
+  const errors = scoped.filter((event) => event.status === "error").length;
+  const warnings = scoped.filter((event) => event.status === "warning").length;
+  const cpu = latestNumber(scoped, "cpuPercent");
+  const memory = latestNumber(scoped, "residentMemoryBytes", "physicalMemoryBytes");
+  const contextSwitches = latestNumber(scoped, "contextSwitches");
+  const diskRead = latestNumber(scoped, "diskReadBytes");
+  const diskWrite = latestNumber(scoped, "diskWriteBytes");
+  const p95 = percentile(measured.map((event) => event.duration), .95);
+  const statusTotal = Math.max(scoped.length, 1);
+  const healthy = Math.max(0, scoped.length - errors - warnings);
+  const hasTelemetry = scoped.length > 0;
+  const rate = useMemo(() => eventRate(scoped), [scoped]);
+  const stageP95 = (kind: typeof events[number]["kind"]) => formatDuration(percentile(measured.filter((event) => event.kind === kind).map((event) => event.duration), .95));
+  const journeySummary = (["internet", "browser", "system"] as const).map((journey) => {
+    const source = scoped.filter((event) => classifyJourney(event) === journey);
+    return { journey, events: source.length, errors: source.filter((event) => event.status === "error").length, p95: percentile(source.filter(isMeasuredEvent).map((event) => event.duration), .95) };
+  });
 
   return (
     <PanelFrame
       eyebrow="Dashboards / Browser runtime"
       title="Velora runtime monitor"
       description="Live operational view across execution, resources, scheduling, and transport."
-      actions={<DashboardControls />}
     >
+      <section className="overview-context">
+        <div><LivePill /><strong>{String(lifecycle?.payload.inspectionState ?? (hasTelemetry ? "receiving telemetry" : "waiting for inspection"))}</strong><span>{String(lifecycle?.payload.requestedUrl ?? "Run Inspect URL to start an observed journey")}</span></div>
+        <DashboardControls range={range} inspection={inspection} inspections={inspections} onRange={setRange} onInspection={setInspection} />
+      </section>
       <div className="metric-grid">
-        <Metric label="Sessions" value={hasTelemetry ? formatNumber(sessions) : "—"} delta={statusLabel(status)} icon={Activity} />
-        <Metric label="Active sessions" value={hasTelemetry ? formatNumber(activeSessions) : "—"} delta="last 60s" icon={Activity} />
+        <Metric label="Inspection" value={lifecycle ? String(lifecycle.payload.inspectionState) : "—"} delta={statusLabel(status)} icon={Activity} />
+        <Metric label="Signals" value={hasTelemetry ? formatNumber(scoped.length) : "—"} delta={`${measured.length} timed`} icon={Activity} />
         <Metric label="Error rate" value={hasTelemetry ? `${(errors / statusTotal * 100).toFixed(2)}%` : "—"} delta={`${warnings} warnings`} icon={CircleDot} />
-        <Metric label="P95 latency" value={hasTelemetry ? formatDuration(p95) : "—"} delta="observed window" icon={Clock3} />
-        <Metric label="JS heap (latest)" value={heap == null ? "—" : formatBytes(heap)} delta={heap == null ? "Awaiting memory telemetry" : "latest sample"} icon={Cpu} />
-        <Metric label="Crash rate" value="—" delta="No crash signal" icon={CircleDot} />
+        <Metric label="Measured P95" value={formatDuration(p95)} delta="excludes unavailable boundaries" icon={Clock3} />
+        <Metric label="CPU (latest)" value={cpu == null ? "—" : `${cpu.toFixed(1)}%`} delta={cpu == null ? "Signal unavailable" : "core process sample"} icon={Cpu} />
+        <Metric label="Resident memory" value={memory == null ? "—" : formatBytes(memory)} delta={memory == null ? "Signal unavailable" : "core process sample"} icon={Database} />
+      </div>
+      <div className="overview-journeys">
+        {journeySummary.map((item) => <Link href={item.journey === "internet" ? "/internet-journey" : item.journey === "browser" ? "/browser-journey" : "/system-journey"} key={item.journey}><span>{item.journey} journey</span><strong>{item.events || "—"} signals</strong><small>{item.events ? `${item.errors} errors · ${formatDuration(item.p95)} P95` : "No observed evidence"}</small></Link>)}
       </div>
       <div className="monitor-grid">
         <section className="panel-card monitor-panel monitor-panel--throughput">
-          <CardHeader title="Event throughput" subtitle="Incremental ring buffer · 60 second window" icon={Gauge} />
-          <RealtimeChart />
+          <CardHeader title="Event throughput" subtitle="Events per second from telemetry timestamps" icon={Gauge} />
+          <RealtimeChart data={rate} />
         </section>
         <section className="panel-card monitor-panel monitor-panel--health">
           <CardHeader title="Runtime health" subtitle="Current execution profile" icon={Database} />
           <div className="health-stack">
-            <HealthRow label="Main thread" value={formatDuration(percentile(events.filter((event) => event.payload.thread === "Main" || event.kind === "javascript").map((event) => event.duration), .95))} tone="primary" width={barWidth(p95, events)} />
-            <HealthRow label="Scheduler queue" value={queue == null ? "—" : `${formatNumber(queue)} tasks`} tone="blue" width={queue == null ? "0%" : `${Math.min(100, queue)}%`} />
-            <HealthRow label="JS heap" value={heap == null ? "—" : formatBytes(heap)} tone="mint" width={heap == null ? "0%" : `${Math.min(100, heap / (512 * 1024 * 1024) * 100)}%`} />
-            <HealthRow label="DOM nodes" value={domNodes == null ? "—" : formatNumber(domNodes)} tone="amber" width={domNodes == null ? "0%" : `${Math.min(100, domNodes / 50_000 * 100)}%`} />
+            <HealthRow label="Measured latency P95" value={formatDuration(p95)} tone="primary" width={barWidth(p95, measured)} />
+            <HealthRow label="Context switches" value={contextSwitches == null ? "—" : formatNumber(contextSwitches)} tone="blue" width={contextSwitches == null ? "0%" : "100%"} />
+            <HealthRow label="Disk read" value={diskRead == null ? "—" : formatBytes(diskRead)} tone="mint" width={diskRead == null ? "0%" : "100%"} />
+            <HealthRow label="Disk write" value={diskWrite == null ? "—" : formatBytes(diskWrite)} tone="amber" width={diskWrite == null ? "0%" : "100%"} />
           </div>
         </section>
         <section className="panel-card monitor-panel">
@@ -83,17 +106,17 @@ export function OverviewPanel() {
           </div>
         </section>
         <section className="panel-card monitor-panel">
-          <CardHeader title="Resource pressure" subtitle="Current saturation" icon={Activity} />
+          <CardHeader title="Core process sample" subtitle="Latest system evidence; no assumed capacity" icon={Activity} />
           <div className="gauge-stack">
             <MiniGauge label="CPU" value={cpu == null ? "—" : `${Math.max(0, Math.min(100, cpu)).toFixed(0)}%`} tone={cpu != null && cpu > 80 ? "warn" : "ok"} />
-            <MiniGauge label="Memory" value={heap == null ? "—" : `${Math.max(0, Math.min(100, heap / (512 * 1024 * 1024) * 100)).toFixed(0)}%`} tone="warn" />
-            <MiniGauge label="Queue" value={queue == null ? "—" : `${Math.max(0, Math.min(100, queue)).toFixed(0)}%`} tone="ok" />
+            <MiniGauge label="Resident RAM" value={memory == null ? "—" : formatBytes(memory)} tone="ok" />
+            <MiniGauge label="Context switches" value={contextSwitches == null ? "—" : formatNumber(contextSwitches)} tone="ok" />
           </div>
         </section>
       </div>
       <section className="panel-card monitor-panel monitor-panel--events">
         <CardHeader title="Recent signals" subtitle="Normalized events from the telemetry pipeline" icon={Network} />
-        <EventTable events={events.slice(-9).reverse()} />
+        <EventTable events={scoped.slice(-9).reverse()} />
       </section>
     </PanelFrame>
   );
@@ -250,17 +273,100 @@ export function NetworkPanel() {
   const events = useTelemetryStore((state) => state.events);
   const filter = useNetworkStore((state) => state.filter);
   const setFilter = useNetworkStore((state) => state.setFilter);
-  const network = events.filter((event) => event.kind === "network" && event.name.toLowerCase().includes(filter.toLowerCase())).slice(-120).reverse();
+  const [status, setStatus] = useState("all");
+  const [session, setSession] = useState("all");
+  const [selectedKey, setSelectedKey] = useState<string>();
+  const [detailTab, setDetailTab] = useState<"overview" | "timing" | "headers" | "events">("overview");
+  const networkEvents = useMemo(() => events.filter((event) => event.kind === "network"), [events]);
+  const requests = useMemo(() => aggregateNetworkRequests(networkEvents), [networkEvents]);
+  const sessions = useMemo(() => [...new Set(requests.map((request) => request.sessionId))], [requests]);
+  const visible = useMemo(() => requests.filter((request) => {
+    const text = `${request.url} ${request.method} ${request.protocol} ${request.remoteIp} ${request.statusCode ?? ""} ${request.terminalStatus}`.toLowerCase();
+    return (!filter || text.includes(filter.toLowerCase())) && (status === "all" || request.terminalStatus === status) && (session === "all" || request.sessionId === session);
+  }), [filter, requests, session, status]);
+  const selected = visible.find((request) => request.key === selectedKey) ?? visible[0];
+  const errorCount = requests.filter((request) => request.terminalStatus === "error").length;
+  const bytes = requests.reduce((sum, request) => sum + (request.responseBytes ?? 0), 0);
+  const connections = new Set(requests.flatMap((request) => request.connectionId == null ? [] : [request.connectionId])).size;
+  const protocols = [...new Set(requests.flatMap((request) => request.protocol === "Unavailable" ? [] : [request.protocol]))];
   return (
-    <PanelFrame eyebrow="Network observability" title="Requests" description="Streaming request lifecycle, timings, payload metadata, and correlations.">
-      <div className="toolbar">
-        <input value={filter} onChange={(event) => setFilter(event.target.value)} placeholder="Filter URL, type, status…" className="search-input" />
-        <span>{network.length} visible</span>
+    <PanelFrame eyebrow="Network observability" title="Network Requests" description="Completed transfer lifecycles reconstructed from typed queue, DNS, transport, TLS, server and response events.">
+      <section className="network-summary">
+        <article><span>Transfers</span><strong>{requests.length.toLocaleString()}</strong><small>{visible.length} visible</small></article>
+        <article><span>Failed</span><strong className={errorCount ? "status-text--error" : "status-text--ok"}>{errorCount}</strong><small>{requests.length ? `${(errorCount / requests.length * 100).toFixed(1)}% error rate` : "No transfers"}</small></article>
+        <article><span>Response bytes</span><strong>{bytes ? formatBytes(bytes) : "Unavailable"}</strong><small>Observed body bytes</small></article>
+        <article><span>Connections</span><strong>{connections || "Unavailable"}</strong><small>Unique connection IDs</small></article>
+        <article><span>Protocols</span><strong>{protocols.join(", ") || "Unavailable"}</strong><small>Observed HTTP versions</small></article>
+      </section>
+
+      <section className="network-filters" aria-label="Network filters">
+        <label><span>Search</span><input value={filter} onChange={(event) => setFilter(event.target.value)} placeholder="URL, method, IP, protocol or status…" className="search-input" /></label>
+        <label><span>Status</span><select className="select-control" value={status} onChange={(event) => setStatus(event.target.value)}><option value="all">All statuses</option><option value="ok">Successful</option><option value="error">Failed</option></select></label>
+        <label><span>Session</span><select className="select-control" value={session} onChange={(event) => setSession(event.target.value)}><option value="all">All sessions</option>{sessions.map((value) => <option key={value}>{value}</option>)}</select></label>
+        <button onClick={() => { setFilter(""); setStatus("all"); setSession("all"); }}><X size={13}/> Reset</button>
+      </section>
+
+      <div className="network-layout">
+        <section className="network-request-list">
+          <header><span>Name</span><span>Status</span><span>Protocol</span><span>Remote address</span><span>Size</span><span>Duration</span></header>
+          <div>{visible.length ? visible.map((request) => <button key={request.key} className={selected?.key === request.key ? "active" : ""} onClick={() => setSelectedKey(request.key)}>
+            <span><i className={`event-dot event-dot--${request.terminalStatus === "error" ? "error" : "ok"}`}/><b>{request.method}</b><strong>{requestDisplayName(request.url)}</strong><small>{request.url}</small></span>
+            <span className={`status-text--${request.terminalStatus === "error" ? "error" : "ok"}`}>{request.statusCode ?? (request.terminalStatus === "error" ? "ERR" : "—")}</span>
+            <code>{request.protocol}</code><code>{request.remoteIp}</code><code>{formatOptionalBytes(request.responseBytes)}</code><code>{formatDuration(request.duration)}</code>
+          </button>) : <div className="network-empty"><Wifi size={20}/><strong>{requests.length ? "No transfers match the current filters" : "Waiting for network telemetry"}</strong><span>{requests.length ? "Reset filters or search for a different URL." : "Inspect a URL to capture its transfer lifecycle."}</span></div>}</div>
+        </section>
+
+        <aside className="network-detail">{selected ? <>
+          <header><div><span>{selected.method} · {selected.protocol}</span><strong>{requestDisplayName(selected.url)}</strong><small>{selected.url}</small></div><b className={`status-text--${selected.terminalStatus === "error" ? "error" : "ok"}`}>{selected.statusCode ?? selected.terminalStatus}</b></header>
+          <nav>{(["overview", "timing", "headers", "events"] as const).map((tab) => <button key={tab} className={detailTab === tab ? "active" : ""} onClick={() => setDetailTab(tab)}>{tab}</button>)}</nav>
+          {detailTab === "overview" && <NetworkOverview request={selected} />}
+          {detailTab === "timing" && <NetworkTiming request={selected} />}
+          {detailTab === "headers" && <NetworkHeaders request={selected} />}
+          {detailTab === "events" && <NetworkEvents request={selected} />}
+        </> : <div className="network-empty"><Network size={20}/><strong>Select a transfer</strong></div>}</aside>
       </div>
-      <section className="panel-card"><EventTable events={network} network /></section>
     </PanelFrame>
   );
 }
+
+const networkStageOrder = ["queue", "cache", "dns", "routing", "proxy", "tcp", "tls", "request", "redirect", "server", "response", "received"];
+type NetworkRequest = ReturnType<typeof aggregateNetworkRequests>[number];
+
+function aggregateNetworkRequests(events: TelemetryEvent[]) {
+  const groups = new Map<string, TelemetryEvent[]>();
+  const active = new Map<string, { key: string; seen: Set<string>; index: number }>();
+  for (const event of [...events].sort((a, b) => a.sequence - b.sequence)) {
+    const payload = event.payload;
+    const inspection = String(payload.inspectionId ?? event.sessionId);
+    const url = String(payload.url ?? payload.requestedUrl ?? "URL unavailable");
+    const base = `${inspection}|${url}`;
+    const stage = String(payload.journeyStage ?? event.name);
+    const current = active.get(base);
+    const startsTransfer = stage === "queue" || !current || current.seen.has(stage) || current.seen.has("received");
+    const group = startsTransfer ? { key: `${base}|${(current?.index ?? -1) + 1}`, seen: new Set<string>(), index: (current?.index ?? -1) + 1 } : current;
+    active.set(base, group);
+    group.seen.add(stage);
+    const key = group.key;
+    groups.set(key, [...(groups.get(key) ?? []), event]);
+  }
+  return [...groups].map(([key, grouped]) => {
+    const ordered = [...grouped].sort((a, b) => networkStageOrder.indexOf(String(a.payload.journeyStage ?? a.name)) - networkStageOrder.indexOf(String(b.payload.journeyStage ?? b.name)));
+    const terminal = [...ordered].reverse().find((event) => event.payload.terminalStatus != null || event.payload.responseStatus != null) ?? ordered.at(-1)!;
+    const payload = terminal.payload;
+    const statusEvent = ordered.find((event) => event.status === "error");
+    return { key, events: ordered, sessionId: terminal.sessionId, inspectionId: String(payload.inspectionId ?? "Unavailable"), url: String(payload.url ?? payload.requestedUrl ?? "Unavailable"), method: String(payload.method ?? "GET"), protocol: String(payload.httpVersion ?? "Unavailable"), remoteIp: String(payload.primaryIp ?? "Unavailable"), connectionId: payload.connectionId == null ? undefined : String(payload.connectionId), statusCode: typeof payload.responseStatus === "number" && payload.responseStatus > 0 ? payload.responseStatus : undefined, responseBytes: latestPayloadNumber(ordered, "responseBodyBytes"), duration: ordered.reduce((sum, event) => sum + Math.max(0, event.duration), 0), terminalStatus: statusEvent || payload.terminalStatus === "error" ? "error" : "ok", connectionReused: payload.connectionReused === true, usedProxy: payload.usedProxy === true, redirectCount: typeof payload.redirectCount === "number" ? payload.redirectCount : undefined, contentType: payloadString(payload, "contentType"), contentEncoding: payloadString(payload, "contentEncoding"), cacheDecision: payloadString(payload, "cacheDecision"), headers: { "Cache-Control": payloadString(payload, "cacheControl"), Server: payloadString(payload, "server"), Age: payloadString(payload, "age"), Via: payloadString(payload, "via"), ETag: payloadString(payload, "etag") }, failure: statusEvent ? String(statusEvent.payload.error ?? statusEvent.payload.errorMessage ?? statusEvent.payload.failureReason ?? "Network operation failed") : undefined };
+  }).sort((a, b) => (b.events.at(-1)?.timestamp ?? 0) - (a.events.at(-1)?.timestamp ?? 0));
+}
+
+function NetworkOverview({ request }: { request: NetworkRequest }) { return <div className="network-detail-grid"><NetworkFact label="Request method" value={request.method}/><NetworkFact label="Response status" value={request.statusCode == null ? "Unavailable" : String(request.statusCode)}/><NetworkFact label="Remote address" value={request.remoteIp}/><NetworkFact label="Connection" value={request.connectionId ?? "Unavailable"}/><NetworkFact label="Connection reused" value={request.connectionReused ? "Yes" : "No / unavailable"}/><NetworkFact label="Proxy used" value={request.usedProxy ? "Yes" : "No"}/><NetworkFact label="Redirects" value={request.redirectCount == null ? "Unavailable" : String(request.redirectCount)}/><NetworkFact label="Cache decision" value={request.cacheDecision ?? "Unavailable"}/><NetworkFact label="Content type" value={request.contentType ?? "Unavailable"}/><NetworkFact label="Content encoding" value={request.contentEncoding ?? "Unavailable"}/><NetworkFact label="Response bytes" value={formatOptionalBytes(request.responseBytes)}/><NetworkFact label="Inspection" value={request.inspectionId}/>{request.failure && <div className="network-failure"><AlertTriangle size={15}/><span><strong>Transfer failed</strong><small>{request.failure}</small></span></div>}</div>; }
+function NetworkTiming({ request }: { request: NetworkRequest }) { const max = Math.max(...request.events.map((event) => event.duration), 1); return <div className="network-timing">{networkStageOrder.map((stage) => { const event = request.events.find((candidate) => String(candidate.payload.journeyStage ?? candidate.name) === stage); const measurement = String(event?.payload.measurement ?? "unavailable"); return <div key={stage} className={`network-timing__row network-timing__row--${event?.status ?? "missing"}`}><span>{stage}</span><div><i style={{ width: event && event.duration > 0 ? `${Math.max(2, event.duration / max * 100)}%` : "2%" }}/></div><strong>{!event ? "Not emitted" : measurement === "boundary" ? "Boundary" : measurement === "reused" ? "Reused" : event.duration > 0 ? `${event.duration.toFixed(3)} ms` : measurement}</strong></div>; })}<footer><span>Total measured stage duration</span><strong>{formatDuration(request.duration)}</strong></footer></div>; }
+function NetworkHeaders({ request }: { request: NetworkRequest }) { const captured = Object.entries(request.headers).filter((entry): entry is [string, string] => typeof entry[1] === "string"); return <div className="network-headers"><section><header>Response metadata captured by core</header>{captured.length ? captured.map(([name, value]) => <div key={name}><code>{name}</code><span>{value}</span></div>) : <p>No response header values were captured for this transfer.</p>}</section><aside><strong>Capture boundary</strong><p>Only typed response metadata emitted by Velora Core is displayed. Complete request headers, response headers, cookies and body content are not reconstructed or invented.</p></aside></div>; }
+function NetworkEvents({ request }: { request: NetworkRequest }) { return <div className="network-raw-events">{request.events.map((event) => <details key={event.id}><summary><span className={`status-text--${event.status}`}>{event.status}</span><strong>{event.name}</strong><code>#{event.sequence}</code><small>{event.duration.toFixed(3)} ms</small></summary><pre>{JSON.stringify(event, null, 2)}</pre></details>)}</div>; }
+function NetworkFact({ label, value }: { label: string; value: string }) { return <div><small>{label}</small><strong>{value}</strong></div>; }
+function latestPayloadNumber(events: TelemetryEvent[], key: string) { for (let index = events.length - 1; index >= 0; index--) { const value = events[index].payload[key]; if (typeof value === "number" && Number.isFinite(value)) return value; } return undefined; }
+function payloadString(payload: Record<string, unknown>, key: string) { const value = payload[key]; return typeof value === "string" && value.length ? value : undefined; }
+function requestDisplayName(url: string) { try { const parsed = new URL(url); return `${parsed.hostname}${parsed.pathname}`; } catch { return url; } }
+function formatOptionalBytes(value?: number) { return value == null ? "Unavailable" : formatBytes(value); }
 
 export function ReplayPanel() {
   const status = useReplayStore((state) => state.status);
@@ -294,19 +400,19 @@ function PanelFrame({ eyebrow, title, description, actions, children }: { eyebro
 }
 
 function Metric({ label, value, delta, positive, icon: Icon }: { label: string; value: string; delta: string; positive?: boolean; icon: typeof Activity }) {
-  return <article className="metric-card"><div className="metric-top"><span>{label}</span><Icon size={13} /></div><strong>{value}</strong><span className={positive ? "delta delta--positive" : "delta"}>{delta}</span><span className="metric-spark">{[2,4,3,7,5,9,8,12,10,14].map((height, index) => <i key={index} style={{height}} />)}</span></article>;
+  return <article className="metric-card"><div className="metric-top"><span>{label}</span><Icon size={13} /></div><strong>{value}</strong><span className={positive ? "delta delta--positive" : "delta"}>{delta}</span></article>;
 }
 
 function CardHeader({ title, subtitle, icon: Icon }: { title: string; subtitle: string; icon: typeof Activity }) {
-  return <header className="card-header"><div><h2><Icon size={15} />{title}</h2><p>{subtitle}</p></div><button className="icon-button" aria-label={`More options for ${title}`}>•••</button></header>;
+  return <header className="card-header"><div><h2><Icon size={15} />{title}</h2><p>{subtitle}</p></div></header>;
 }
 
 function HealthRow({ label, value, width, tone }: { label: string; value: string; width: string; tone: string }) {
   return <div className="health-row"><div><span>{label}</span><strong>{value}</strong></div><div className="health-bar"><span className={`health-bar__fill health-bar__fill--${tone}`} style={{ width }} /></div></div>;
 }
 
-function DashboardControls() {
-  return <div className="dashboard-controls"><LivePill /><button className="toolbar-button"><Clock3 size={13} />Last 5 minutes</button><button className="toolbar-button" aria-label="Refresh dashboard"><RefreshCw size={13} />5s</button><button className="icon-button" aria-label="Share dashboard"><Share2 size={14} /></button></div>;
+function DashboardControls({ range, inspection, inspections, onRange, onInspection }: { range: string; inspection: string; inspections: Array<[string, string]>; onRange: (value: string) => void; onInspection: (value: string) => void }) {
+  return <div className="dashboard-controls"><LivePill /><label><span>Inspection</span><select value={inspection} onChange={(event) => onInspection(event.target.value)}><option value="latest">Latest inspection</option><option value="all">All inspections</option>{inspections.map(([id, url]) => <option value={id} key={id}>{url}</option>)}</select></label><label><Clock3 size={13} /><select aria-label="Overview time range" value={range} onChange={(event) => onRange(event.target.value)}><option value="1m">Last 1 minute</option><option value="5m">Last 5 minutes</option><option value="15m">Last 15 minutes</option><option value="all">Full buffer</option></select></label></div>;
 }
 
 function SubsystemBar({ label, value, width }: { label: string; value: string; width: string }) {
@@ -391,6 +497,8 @@ function classifyJourney(event: ReturnType<typeof useTelemetryStore.getState>["e
 }
 function formatBytes(value: number) { if (value >= 1024 * 1024) return `${(value / (1024 * 1024)).toFixed(1)} MB`; if (value >= 1024) return `${(value / 1024).toFixed(1)} KB`; return `${value.toFixed(0)} B`; }
 function latestNumber(events: ReturnType<typeof useTelemetryStore.getState>["events"], ...keys: string[]) { for (let index = events.length - 1; index >= 0; index -= 1) { for (const key of keys) { const value = events[index].payload[key]; if (typeof value === "number" && Number.isFinite(value)) return value; } } return undefined; }
+function isMeasuredEvent(event: TelemetryEvent) { const state = String(event.payload.measurementState ?? event.payload.measurement ?? "").toLowerCase(); return event.duration > 0 && Number.isFinite(event.duration) && !["unavailable", "not-timed", "not timed", "boundary", "awaiting"].includes(state); }
+function eventRate(events: TelemetryEvent[]) { const buckets = new Map<number, number>(); events.forEach((event) => { const second = Math.floor(event.timestamp / 1000) * 1000; buckets.set(second, (buckets.get(second) ?? 0) + 1); }); return [...buckets.entries()].sort((a, b) => a[0] - b[0]); }
 function statusLabel(status: ReturnType<typeof useTelemetryStore.getState>["status"]) { return status === "live" ? "streaming" : status; }
 function barWidth(value: number, events: ReturnType<typeof useTelemetryStore.getState>["events"]) { const max = Math.max(1, percentile(events.map((event) => event.duration), .99)); return `${Math.min(100, value / max * 100)}%`; }
 function barWidthFromValue(value: string) { const number = Number.parseFloat(value); return Number.isFinite(number) ? `${Math.min(100, number / 200 * 100)}%` : "0%"; }

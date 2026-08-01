@@ -13,6 +13,7 @@ let reading = false;
 let inspections = Promise.resolve();
 let inspectionSequence = 0;
 let activeInspection = null;
+let lifecycleSequence = Date.now();
 
 const server = new WebSocketServer({ host: "127.0.0.1", port, path: "/telemetry" });
 server.on("connection", (socket) => {
@@ -35,21 +36,31 @@ server.on("connection", (socket) => {
       inspections = inspections.then(async () => {
         await drain();
         activeInspection = { id: `inspection-${++inspectionSequence}`, requestedUrl: requestedUrl.href };
-        await sdkFetch(command.url, {
-          format: "md",
-          binary: veloraBinary,
-          waitUntil: "load",
-          timeout: 90_000,
-        });
-        await drain();
+        emitInspectionState("started");
+        try {
+          await sdkFetch(command.url, {
+            format: "md",
+            binary: veloraBinary,
+            waitUntil: "load",
+            timeout: 90_000,
+          });
+          await drain();
+          emitInspectionState("completed");
+        } catch (error) {
+          await drain();
+          const reason = typeof error?.message === "string" ? error.message : "Unknown navigation error";
+          emitInspectionState("failed", error, reason);
+          if (error?.code === "NAVIGATION_ERROR" || /CouldntResolveHost/i.test(reason)) {
+            console.warn(`Velora inspect stopped: ${reason} (${command.url})`);
+          } else {
+            console.error("Velora SDK inspect failed:", error);
+          }
+        } finally {
+          activeInspection = null;
+        }
       })
         .catch((error) => {
-          const reason = typeof error?.message === "string" ? error.message : "Unknown navigation error";
-          if (error?.code === "NAVIGATION_ERROR") {
-            console.warn(`Velora inspect stopped: ${reason} (${command.url})`);
-            return;
-          }
-          console.error("Velora SDK inspect failed:", error);
+          console.error("Velora inspection queue failed:", error);
         });
     } catch (error) {
       console.error("Invalid telemetry command:", error);
@@ -69,10 +80,42 @@ function broadcast(line) {
   if (activeInspection && event && typeof event === "object") {
     event.payload = { ...(event.payload ?? {}), inspectionId: activeInspection.id, requestedUrl: activeInspection.requestedUrl };
   }
+  broadcastEvent(event);
+}
+
+function broadcastEvent(event) {
   const payload = JSON.stringify(event);
   for (const socket of clients) {
     if (socket.readyState === WebSocket.OPEN) socket.send(payload);
   }
+}
+
+function emitInspectionState(state, error, message) {
+  if (!activeInspection) return;
+  const timestamp = Date.now();
+  const errorCode = typeof error?.code === "string"
+    ? error.code
+    : typeof error?.payload?.error?.message === "string"
+      ? error.payload.error.message
+      : undefined;
+  broadcastEvent({
+    id: `${activeInspection.id}:${state}:${timestamp}`,
+    sessionId: activeInspection.id,
+    sequence: ++lifecycleSequence,
+    timestamp,
+    duration: 0,
+    kind: "log",
+    name: `inspection-${state}`,
+    status: state === "failed" ? "error" : "ok",
+    payload: {
+      inspectionId: activeInspection.id,
+      requestedUrl: activeInspection.requestedUrl,
+      inspectionState: state,
+      errorCode,
+      errorMessage: message,
+      source: "velora-sdk",
+    },
+  });
 }
 
 async function drain() {

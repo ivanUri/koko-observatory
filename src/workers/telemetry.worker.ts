@@ -1,29 +1,23 @@
 /// <reference lib="webworker" />
 
-import { Index } from "flexsearch";
 import type { TelemetryEvent, WorkerSnapshot } from "@/src/core/types";
 
-const MAX_EVENTS = 1_000_000;
+const MAX_EVENTS = 10_000;
 const GRAPH_WINDOW = 500;
 const RATE_WINDOW = 180;
 const events: TelemetryEvent[] = [];
 const rates: Array<[number, number]> = [];
-const search = new Index({ tokenize: "forward", cache: 100 });
 
 self.onmessage = ({ data }: MessageEvent<{ type: "append"; batch: TelemetryEvent[] }>) => {
   if (data.type !== "append") return;
   events.push(...data.batch);
-  data.batch.forEach((event) => {
-    search.add(event.sequence, `${event.kind} ${event.name} ${JSON.stringify(event.payload)}`);
-  });
   if (events.length > MAX_EVENTS) events.splice(0, events.length - MAX_EVENTS);
 
-  const now = Date.now();
-  rates.push([now, data.batch.length * 3.57]);
-  if (rates.length > RATE_WINDOW) rates.splice(0, rates.length - RATE_WINDOW);
+  rebuildRates(events);
 
   const durations = events
     .slice(-5_000)
+    .filter(isMeasured)
     .map((event) => event.duration)
     .sort((a, b) => a - b);
   const graphSource = events.slice(-GRAPH_WINDOW);
@@ -43,6 +37,21 @@ self.onmessage = ({ data }: MessageEvent<{ type: "append"; batch: TelemetryEvent
   };
   self.postMessage(snapshot);
 };
+
+function rebuildRates(source: TelemetryEvent[]) {
+  const buckets = new Map<number, number>();
+  for (const event of source) {
+    const second = Math.floor(event.timestamp / 1_000) * 1_000;
+    buckets.set(second, (buckets.get(second) ?? 0) + 1);
+  }
+  rates.splice(0, rates.length, ...[...buckets.entries()].sort((a, b) => a[0] - b[0]).slice(-RATE_WINDOW));
+}
+
+function isMeasured(event: TelemetryEvent) {
+  if (!Number.isFinite(event.duration) || event.duration <= 0) return false;
+  const state = String(event.payload.measurementState ?? event.payload.measurement ?? "").toLowerCase();
+  return !["unavailable", "not-timed", "not timed", "boundary", "awaiting"].includes(state);
+}
 
 function buildGraphEdges(source: TelemetryEvent[]) {
   const ids = new Set(source.map((event) => event.id));

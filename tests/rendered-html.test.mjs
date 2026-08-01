@@ -41,10 +41,24 @@ test("keeps pipeline and UI state outside React component state", async () => {
 });
 
 test("Overview derives operational metrics from telemetry", async () => {
-  const panels = await readFile(new URL("../src/components/panels.tsx", import.meta.url), "utf8");
+  const [panels, worker, bridge] = await Promise.all([
+    readFile(new URL("../src/components/panels.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../src/workers/telemetry.worker.ts", import.meta.url), "utf8"),
+    readFile(new URL("../scripts/velora-telemetry-bridge.mjs", import.meta.url), "utf8"),
+  ]);
   assert.match(panels, /latestNumber\(events/);
   assert.match(panels, /percentile\(events/);
-  assert.match(panels, /No crash signal/);
+  assert.match(panels, /Latest inspection/);
+  assert.match(panels, /excludes unavailable boundaries/);
+  assert.match(panels, /Core process sample/);
+  assert.doesNotMatch(panels, /\[2,4,3,7,5,9,8,12,10,14\]/);
+  assert.doesNotMatch(panels, /No crash signal|512 \* 1024 \* 1024|50_000/);
+  assert.doesNotMatch(worker, /3\.57|MAX_EVENTS = 1_000_000/);
+  assert.match(worker, /rebuildRates/);
+  assert.match(worker, /isMeasured/);
+  assert.match(bridge, /emitInspectionState\("started"\)/);
+  assert.match(bridge, /emitInspectionState\("completed"\)/);
+  assert.match(bridge, /emitInspectionState\("failed"/);
   assert.doesNotMatch(panels, /Active sessions.*1,243|JS heap \(P95\).*128 MB|Crash rate.*0\.05%/);
 });
 
@@ -77,6 +91,16 @@ test("Event Inspector selects real events and exposes typed evidence", async () 
   assert.match(tooling, /parentId === selected\.id/);
   assert.match(tooling, /useSelectionStore/);
   assert.doesNotMatch(tooling, /request\.json|runtime\.config/);
+});
+
+test("Network page groups typed stage events into transfer lifecycles", async () => {
+  const panels = await readFile(new URL("../src/components/panels.tsx", import.meta.url), "utf8");
+  assert.match(panels, /aggregateNetworkRequests/);
+  assert.match(panels, /networkStageOrder/);
+  assert.match(panels, /Connection reused/);
+  assert.match(panels, /Response metadata captured by core/);
+  assert.match(panels, /URL, method, IP, protocol or status/);
+  assert.doesNotMatch(panels, /event\.name\.toLowerCase\(\)\.includes\(filter/);
 });
 
 test("Internet Journey ends at the HTTP response boundary", async () => {

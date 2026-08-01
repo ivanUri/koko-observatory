@@ -33,8 +33,9 @@ function ObservatoryRuntime({ initialPlugin }: { initialPlugin: string }) {
   const plugin = getPlugin(activePlugin);
   const ActivePanel = plugin.component;
   const pipeline = useMemo(() => {
-    const endpoint = process.env.NEXT_PUBLIC_VELORA_TELEMETRY_URL;
-    return new TelemetryPipeline(endpoint ? new WebSocketTransport(endpoint) : new DemoTransport());
+    const endpoint = process.env.NEXT_PUBLIC_VELORA_TELEMETRY_URL ?? "ws://127.0.0.1:9223/telemetry";
+    const demo = process.env.NEXT_PUBLIC_VELORA_DEMO === "1";
+    return new TelemetryPipeline(demo ? new DemoTransport() : new WebSocketTransport(endpoint));
   }, []);
   useEffect(() => setActivePlugin(initialPlugin), [initialPlugin, setActivePlugin]);
 
@@ -43,13 +44,17 @@ function ObservatoryRuntime({ initialPlugin }: { initialPlugin: string }) {
     const unsubscribe = observatoryBus.on("snapshot", (snapshot) => {
       useTelemetryStore.getState().append(snapshot.events, snapshot.rates, snapshot.p95);
       useGraphStore.getState().update(snapshot.graphNodes, snapshot.graphEdges);
-      if (snapshot.events.length) useUIStore.getState().setInspecting(false);
+      const terminal = snapshot.events.find((event) => event.payload.inspectionState === "completed" || event.payload.inspectionState === "failed");
+      if (terminal) useUIStore.getState().setInspecting(false);
     });
     const unsubscribeRaw = observatoryBus.on("raw", (events) => {
       useInternetJourneyStore.getState().ingest(events);
       useBrowserJourneyStore.getState().ingest(events);
     });
-    void pipeline.start();
+    void pipeline.start().catch(() => {
+      useTelemetryStore.getState().setStatus("offline");
+      useUIStore.getState().setInspecting(false);
+    });
     const inspect = (event: Event) => pipeline.send(JSON.stringify({ type: "inspect-url", url: (event as CustomEvent<string>).detail }));
     window.addEventListener("velora:inspect-url", inspect);
     return () => {
@@ -119,6 +124,8 @@ function GlobalInspector() {
     useInternetJourneyStore.getState().setInputUrl(url);
     if (useInternetJourneyStore.getState().phase === "error") {
       useBrowserJourneyStore.getState().block("Internet Journey rejected the URL before a request could be sent.");
+      useUIStore.getState().setInspecting(false);
+      return;
     }
     useUIStore.getState().setInspecting(true);
     window.dispatchEvent(new CustomEvent("velora:inspect-url", { detail: url }));
