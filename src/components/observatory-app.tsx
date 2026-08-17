@@ -13,6 +13,7 @@ import { useExportStore, useGraphStore, useTelemetryStore, useUIStore } from "@/
 import { useInternetJourneyStore } from "@/src/journeys/internet/store";
 import { useBrowserJourneyStore } from "@/src/journeys/browser/store";
 import { useExecutionStore } from "@/src/executions/store";
+import { loadRecentExecutionEvents } from "@/src/executions/artifact-store";
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { staleTime: 30_000, refetchOnWindowFocus: false } },
@@ -69,6 +70,14 @@ function ObservatoryRuntime({ initialPlugin }: { initialPlugin: string }) {
     return new TelemetryPipeline(demo ? new DemoTransport() : new WebSocketTransport(endpoint));
   }, []);
   useEffect(() => setActivePlugin(initialPlugin), [initialPlugin, setActivePlugin]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void loadRecentExecutionEvents().then((events) => {
+      if (!cancelled) useTelemetryStore.getState().hydrate(events);
+    }).catch(() => undefined);
+    return () => { cancelled = true; };
+  }, []);
 
   useEffect(() => {
     const unsubscribeStatus = observatoryBus.on("status", (status) => useTelemetryStore.getState().setStatus(status));

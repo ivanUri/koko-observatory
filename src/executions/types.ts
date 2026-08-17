@@ -6,6 +6,29 @@ export type ExecutionFidelity = "playback-only" | "action-rerun" | "reconstructe
 export type ExecutionStatus = "recording" | "completed" | "failed" | "paused" | "unknown";
 export type CheckpointKind = "bookmark" | "reconstructible" | "live";
 
+/** A replay plan is deliberately serialisable: the bridge writes it to a
+ * local policy file and Core enforces the final network boundary. */
+export type ReplayMode = "strict" | "fallback";
+
+export interface ReplayOverride {
+  key: string;
+  status?: number;
+  body?: string;
+  headers?: Array<{ name: string; value: string }>;
+}
+
+export interface ReplayBreakpoint {
+  key: string;
+  label?: string;
+}
+
+export interface ReplayPlan {
+  mode: ReplayMode;
+  disabledKeys: string[];
+  overrides: ReplayOverride[];
+  breakpoints: ReplayBreakpoint[];
+}
+
 export type ExecutionCapability =
   | "recording"
   | "causal-graph"

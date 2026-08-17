@@ -1,5 +1,5 @@
 import { watch } from "node:fs";
-import { mkdir, open, readFile, stat, writeFile } from "node:fs/promises";
+import { mkdir, open, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
@@ -8,18 +8,16 @@ import { WebSocketServer, WebSocket } from "ws";
 const workspaceRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const kokoDataRoot = resolve(workspaceRoot, "koko-core");
 const executionRoot = resolve(kokoDataRoot, ".koko-user-data/observatory-executions");
-const telemetryFile = resolve(executionRoot, "telemetry.jsonl");
 const port = Number(process.env.KOKO_TELEMETRY_PORT ?? 9223);
 const clients = new Set();
 const kokoBinary = process.env.KOKO_BINARY ?? resolve(kokoDataRoot, "zig-out/bin/koko");
 await Promise.all([
   mkdir(executionRoot, { recursive: true }),
 ]);
-let offset = 0;
-let pending = "";
+let telemetrySource = { path: "", offset: 0, pending: "" };
 let reading = false;
 let inspections = Promise.resolve();
-let inspectionSequence = 0;
+let inspectionSequence = await latestExecutionSequence();
 let activeInspection = null;
 const executions = new Map();
 let lifecycleSequence = Date.now();
@@ -36,15 +34,6 @@ const DEFAULT_RUN_OPTIONS = Object.freeze({
   cookieJson: "",
   includeFrames: false,
 });
-
-// JSONL is an append-only local diagnostic file. Do not replay entries from a
-// previous bridge/core process into a new Observatory session: those records
-// may use an older schema and are not part of the user's next inspection.
-try {
-  offset = (await stat(telemetryFile)).size;
-} catch (error) {
-  if (error?.code !== "ENOENT") throw error;
-}
 
 const server = new WebSocketServer({ host: "127.0.0.1", port, path: "/telemetry" });
 server.on("connection", (socket) => {
@@ -72,6 +61,7 @@ server.on("connection", (socket) => {
         await drain();
         const options = normalizeRunOptions(command.options);
         activeInspection = createExecution("inspection", requestedUrl.href, undefined, options);
+        await beginTelemetry(activeInspection);
         emitInspectionState("started");
         try {
           // Run the Core fetch path instead of SDK Page.goto. The CLI path
@@ -140,10 +130,28 @@ function createExecution(kind, requestedUrl, parentExecutionId, options = DEFAUL
     checkpointDirectory: resolve(executionRoot, id, "checkpoint"),
     browserDataDirectory: resolve(executionRoot, id, "browser-data"),
     optionsDirectory: resolve(executionRoot, id, "options"),
+    telemetryFile: resolve(executionRoot, id, "telemetry.jsonl"),
     options,
     events: [],
     lastExportProgressKey: "",
   };
+}
+
+async function latestExecutionSequence() {
+  const entries = await readdir(executionRoot, { withFileTypes: true }).catch((error) => {
+    if (error?.code === "ENOENT") return [];
+    throw error;
+  });
+  return entries.reduce((latest, entry) => {
+    if (!entry.isDirectory()) return latest;
+    const match = /^(?:inspection|replay)-(\d+)$/.exec(entry.name);
+    return match ? Math.max(latest, Number(match[1])) : latest;
+  }, 0);
+}
+
+async function beginTelemetry(execution) {
+  await mkdir(dirname(execution.telemetryFile), { recursive: true });
+  telemetrySource = { path: execution.telemetryFile, offset: 0, pending: "" };
 }
 
 function normalizeRunOptions(raw) {
@@ -195,7 +203,9 @@ function runCoreInspection(url, replay, options = activeInspection?.options ?? D
   const args = [
     "fetch", "--dump", "markdown", "--wait-until", options.waitUntil,
     "--wait-ms", String(options.waitMs),
-    "--internet-journey-file", telemetryFile,
+    "--internet-journey-file", activeInspection.telemetryFile,
+    // Observatory is an explicit local inspection surface, so it opts into
+    // bounded text/JSON bodies without requiring users to manage an env var.
     "--telemetry-capture-bodies",
     // Controlled executions must not inherit an old profile HTTP cache: a
     // 304 has no response body and therefore cannot be replayed safely.
@@ -354,7 +364,8 @@ function queueReplay(command) {
     }
     return;
   }
-  const policy = policyFromRecordedInputs(source.events);
+  const replayPlan = normalizeReplayPlan(command.replayPlan);
+  const policy = policyFromRecordedInputs(source.events, replayPlan);
   if (!policy.rules.length) {
     emitReplayRejected(source, "No complete text response inputs were captured for this execution.");
     return;
@@ -362,6 +373,8 @@ function queueReplay(command) {
   inspections = inspections.then(async () => {
     await drain();
     activeInspection = createExecution("replay", source.requestedUrl, source.id, source.options);
+    activeInspection.replayPlan = replayPlan;
+    await beginTelemetry(activeInspection);
     const policyFile = resolve(executionRoot, activeInspection.id, "replay-policy.json");
     await mkdir(dirname(policyFile), { recursive: true });
     await writeFile(policyFile, JSON.stringify(policy));
@@ -383,29 +396,82 @@ function queueReplay(command) {
   }).catch((error) => console.error("Koko replay queue failed:", error));
 }
 
-function policyFromRecordedInputs(events) {
+function normalizeReplayPlan(raw) {
+  const source = raw && typeof raw === "object" ? raw : {};
+  const mode = source.mode === "fallback" ? "fallback" : "strict";
+  const text = (value) => typeof value === "string" ? value.trim() : "";
+  const disabledKeys = Array.isArray(source.disabledKeys)
+    ? [...new Set(source.disabledKeys.map(text).filter(Boolean))]
+    : [];
+  const overrides = Array.isArray(source.overrides)
+    ? source.overrides.flatMap((item) => {
+      if (!item || typeof item !== "object") return [];
+      const key = text(item.key);
+      if (!key) return [];
+      const status = Number(item.status);
+      const headers = Array.isArray(item.headers)
+        ? item.headers.flatMap((header) => {
+          if (!header || typeof header !== "object") return [];
+          const name = text(header.name);
+          const value = text(header.value);
+          return name ? [{ name, value }] : [];
+        })
+        : undefined;
+      return [{
+        key,
+        ...(Number.isInteger(status) && status >= 100 && status <= 599 ? { status } : {}),
+        ...(typeof item.body === "string" ? { body: item.body } : {}),
+        ...(headers ? { headers } : {}),
+      }];
+    })
+    : [];
+  const breakpoints = Array.isArray(source.breakpoints)
+    ? source.breakpoints.flatMap((item) => {
+      if (!item || typeof item !== "object") return [];
+      const key = text(item.key);
+      return key ? [{ key, ...(text(item.label) ? { label: text(item.label) } : {}) }] : [];
+    })
+    : [];
+  return { mode, disabledKeys, overrides, breakpoints };
+}
+
+function policyFromRecordedInputs(events, replayPlan = normalizeReplayPlan()) {
   const rules = new Map();
+  const overrides = new Map(replayPlan.overrides.map((override) => [override.key, override]));
+  const disabled = new Set(replayPlan.disabledKeys);
   for (const event of events) {
     const payload = event?.payload ?? {};
     if (payload.journeyStage !== "response" || typeof payload.url !== "string" || typeof payload.responseBody !== "string") continue;
     if (payload.bodyCaptureState !== "captured" || payload.bodyTruncated === true) continue;
     const method = typeof payload.method === "string" ? payload.method : "GET";
-    const status = typeof payload.responseStatus === "number" && payload.responseStatus > 0 ? payload.responseStatus : 200;
     const key = `${method}\n${payload.url}`;
+    if (disabled.has(key)) continue;
+    const status = typeof payload.responseStatus === "number" && payload.responseStatus > 0 ? payload.responseStatus : 200;
+    const override = overrides.get(key);
     rules.set(key, {
       method,
       url: payload.url,
-      status,
-      headers: headersFromTelemetry(payload.responseHeaders),
-      body: payload.responseBody,
+      status: override?.status ?? status,
+      headers: override?.headers ?? headersFromTelemetry(payload.responseHeaders),
+      body: override?.body ?? payload.responseBody,
     });
   }
-  return { mode: "strict", rules: [...rules.values()] };
+  const breakpoints = replayPlan.breakpoints.flatMap((breakpoint) => {
+    const separator = breakpoint.key.indexOf("\n");
+    if (separator <= 0) return [];
+    const method = breakpoint.key.slice(0, separator);
+    const url = breakpoint.key.slice(separator + 1);
+    if (!url || !rules.has(breakpoint.key)) return [];
+    return [{ method, url, ...(breakpoint.label ? { label: breakpoint.label } : {}) }];
+  });
+  return { mode: replayPlan.mode, rules: [...rules.values()], breakpoints };
 }
 
 function headersFromTelemetry(raw) {
   if (typeof raw !== "string") return [];
-  return raw.split(/\r?\n/).flatMap((line) => {
+  // Older Core builds emitted the two characters `\\n`. Accept both forms
+  // so an existing recording can still produce a valid replay policy.
+  return raw.replaceAll("\\n", "\n").split(/\r?\n/).flatMap((line) => {
     const separator = line.indexOf(":");
     if (separator <= 0) return [];
     return [{ name: line.slice(0, separator).trim(), value: line.slice(separator + 1).trim() }];
@@ -476,6 +542,12 @@ function emitInspectionState(state, error, message) {
         cookiesConfigured: Boolean(activeInspection.options.cookieJson || activeInspection.options.cookiePath),
         includeFrames: activeInspection.options.includeFrames === true,
       } : undefined,
+      replayPlan: activeInspection.replayPlan ? {
+        mode: activeInspection.replayPlan.mode,
+        disabledCount: activeInspection.replayPlan.disabledKeys.length,
+        overrideCount: activeInspection.replayPlan.overrides.length,
+        breakpointCount: activeInspection.replayPlan.breakpoints.length,
+      } : undefined,
       source: "koko-sdk",
     },
   });
@@ -483,22 +555,24 @@ function emitInspectionState(state, error, message) {
 
 async function drain() {
   if (reading) return;
+  const source = telemetrySource;
+  if (!source.path) return;
   reading = true;
   try {
-    const info = await stat(telemetryFile);
-    if (info.size < offset) {
-      offset = 0;
-      pending = "";
+    const info = await stat(source.path);
+    if (info.size < source.offset) {
+      source.offset = 0;
+      source.pending = "";
     }
-    if (info.size === offset) return;
-    const file = await open(telemetryFile, "r");
+    if (info.size === source.offset) return;
+    const file = await open(source.path, "r");
     try {
-      const size = info.size - offset;
+      const size = info.size - source.offset;
       const buffer = Buffer.alloc(size);
-      await file.read(buffer, 0, size, offset);
-      offset = info.size;
-      const lines = (pending + buffer.toString("utf8")).split("\n");
-      pending = lines.pop() ?? "";
+      await file.read(buffer, 0, size, source.offset);
+      source.offset = info.size;
+      const lines = (source.pending + buffer.toString("utf8")).split("\n");
+      source.pending = lines.pop() ?? "";
       for (const line of lines) broadcast(line);
     } finally {
       await file.close();
@@ -519,4 +593,4 @@ setInterval(() => {
   void drainSiteExportProgress();
 }, 250);
 console.log(`Koko telemetry bridge: ws://127.0.0.1:${port}/telemetry`);
-console.log(`Reading: ${telemetryFile}`);
+console.log(`Execution telemetry root: ${executionRoot}`);

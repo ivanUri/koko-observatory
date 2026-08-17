@@ -2,11 +2,12 @@
 
 import dynamic from "next/dynamic";
 import Link from "next/link";
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Activity, AlertTriangle, CircleDot, Clock3, Cpu, Database, Filter, Gauge, GitBranch, Grid3x3, List, Network, Share2, Waypoints, Wifi, X, Zap } from "lucide-react";
 import { RealtimeChart } from "@/src/components/realtime-chart";
 import { useGraphStore, useNetworkStore, useReplayStore, useSelectionStore, useTelemetryStore } from "@/src/stores";
 import type { TelemetryEvent } from "@/src/core/types";
+import { executionIdFor } from "@/src/executions/types";
 
 const ExecutionGraph = dynamic(
   () => import("@/src/components/execution-graph").then((module) => module.ExecutionGraph),
@@ -755,15 +756,19 @@ export function NetworkPanel() {
   const filter = useNetworkStore((state) => state.filter);
   const setFilter = useNetworkStore((state) => state.setFilter);
   const [status, setStatus] = useState("all");
-  const [session, setSession] = useState("all");
+  const [execution, setExecution] = useState("all");
   const [typeFilter, setTypeFilter] = useState("all");
   const [selectedKey, setSelectedKey] = useState<string>();
   const [detailTab, setDetailTab] = useState<"overview" | "timing" | "headers" | "payload" | "response" | "events">("overview");
   const networkEvents = useMemo(() => events.filter((event) => event.kind === "network"), [events]);
   const requests = useMemo(() => aggregateNetworkRequests(networkEvents), [networkEvents]);
-  const sessions = useMemo(() => [...new Set(requests.map((request) => request.sessionId))], [requests]);
+  const executions = useMemo(() => [...new Set(requests.map((request) => request.executionId))], [requests]);
+  useEffect(() => {
+    const requestedExecution = new URLSearchParams(window.location.search).get("execution");
+    if (requestedExecution) setExecution(requestedExecution);
+  }, []);
   const visible = useMemo(() => requests.filter((request) => {
-    const text = `${request.url} ${request.method} ${request.protocol} ${request.remoteIp} ${request.statusCode ?? ""} ${request.terminalStatus}`.toLowerCase();
+    const text = `${request.url} ${request.method} ${request.protocol} ${request.remoteIp} ${request.statusCode ?? ""} ${request.terminalStatus} ${request.executionId}`.toLowerCase();
     const typeMatch = typeFilter === "all" || (() => {
       const resourceType = (request.resourceType ?? "").toLowerCase();
       const ct = (request.contentType ?? "").toLowerCase();
@@ -774,8 +779,8 @@ export function NetworkPanel() {
       if (typeFilter === "media") return ["image", "media", "font"].includes(resourceType) || ct.includes("image") || ct.includes("video") || ct.includes("audio") || ct.includes("font");
       return true;
     })();
-    return (!filter || text.includes(filter.toLowerCase())) && (status === "all" || request.terminalStatus === status) && (session === "all" || request.sessionId === session) && typeMatch;
-  }), [filter, requests, session, status, typeFilter]);
+    return (!filter || text.includes(filter.toLowerCase())) && (status === "all" || request.terminalStatus === status) && (execution === "all" || request.executionId === execution) && typeMatch;
+  }), [execution, filter, requests, status, typeFilter]);
   const selected = visible.find((request) => request.key === selectedKey) ?? visible[0];
   const errorCount = requests.filter((request) => request.terminalStatus === "error").length;
   const bytes = requests.reduce((sum, request) => sum + (request.responseBytes ?? 0), 0);
@@ -802,8 +807,8 @@ export function NetworkPanel() {
       <section className="network-filters" aria-label="Network filters">
         <label><span>Search</span><input value={filter} onChange={(event) => setFilter(event.target.value)} placeholder="URL, method, IP, protocol or status…" className="search-input" /></label>
         <label><span>Status</span><select className="select-control" value={status} onChange={(event) => setStatus(event.target.value)}><option value="all">All statuses</option><option value="ok">Successful</option><option value="error">Failed</option></select></label>
-        <label><span>Session</span><select className="select-control" value={session} onChange={(event) => setSession(event.target.value)}><option value="all">All sessions</option>{sessions.map((value) => <option key={value}>{value}</option>)}</select></label>
-        <button onClick={() => { setFilter(""); setStatus("all"); setSession("all"); setTypeFilter("all"); }}><X size={13}/> Reset</button>
+        <label><span>Execution</span><select className="select-control" value={execution} onChange={(event) => setExecution(event.target.value)}><option value="all">All executions</option>{executions.map((value) => <option key={value}>{value}</option>)}</select></label>
+        <button onClick={() => { setFilter(""); setStatus("all"); setExecution("all"); setTypeFilter("all"); }}><X size={13}/> Reset</button>
       </section>
 
       {networkEvents.length === 0 && (
@@ -818,8 +823,8 @@ export function NetworkPanel() {
             <code>url · method · httpVersion · primaryIp · connectionId · responseStatus · responseBodyBytes</code>
             <span>Required for Headers tab</span>
             <code>requestHeaders · responseHeaders · cacheControl · server · contentType</code>
-            <span>Optional body capture</span>
-            <code>KOKO_TELEMETRY_CAPTURE_BODIES=1 (truncated text/JSON only)</code>
+            <span>Response body capture</span>
+            <code>Text/JSON is captured automatically (up to 4 MiB); binary remains hidden</code>
           </div>
         </div>
       )}
@@ -864,9 +869,9 @@ function aggregateNetworkRequests(events: TelemetryEvent[]) {
   const active = new Map<string, { key: string; seen: Set<string>; index: number }>();
   for (const event of [...events].sort((a, b) => a.sequence - b.sequence)) {
     const payload = event.payload;
-    const inspection = String(payload.inspectionId ?? event.sessionId);
+    const execution = executionIdFor(event);
     const url = String(payload.url ?? payload.requestedUrl ?? "URL unavailable");
-    const base = `${inspection}|${url}`;
+    const base = `${execution}|${url}`;
     const stage = String(payload.journeyStage ?? event.name);
     const current = active.get(base);
     const startsTransfer = stage === "queue" || !current || current.seen.has(stage) || current.seen.has("received");
@@ -881,7 +886,7 @@ function aggregateNetworkRequests(events: TelemetryEvent[]) {
     const terminal = [...ordered].reverse().find((event) => event.payload.terminalStatus != null || event.payload.responseStatus != null) ?? ordered.at(-1)!;
     const payload = terminal.payload;
     const statusEvent = ordered.find((event) => event.status === "error");
-    return { key, events: ordered, sessionId: terminal.sessionId, inspectionId: String(payload.inspectionId ?? "Unavailable"), url: String(payload.url ?? payload.requestedUrl ?? "Unavailable"), method: String(payload.method ?? "GET"), resourceType: payloadString(payload, "resourceType"), requestId: typeof payload.requestId === "number" ? payload.requestId : undefined, frameId: typeof payload.frameId === "number" ? payload.frameId : undefined, loaderId: typeof payload.loaderId === "number" ? payload.loaderId : undefined, protocol: String(payload.httpVersion ?? "Unavailable"), remoteIp: String(payload.primaryIp ?? "Unavailable"), connectionId: payload.connectionId == null ? undefined : String(payload.connectionId), statusCode: typeof payload.responseStatus === "number" && payload.responseStatus > 0 ? payload.responseStatus : undefined, responseBytes: latestPayloadNumber(ordered, "responseBodyBytes"), duration: ordered.reduce((sum, event) => sum + Math.max(0, event.duration), 0), terminalStatus: statusEvent || payload.terminalStatus === "error" ? "error" : "ok", connectionReused: payload.connectionReused === true, usedProxy: payload.usedProxy === true, redirectCount: typeof payload.redirectCount === "number" ? payload.redirectCount : undefined, contentType: payloadString(payload, "contentType"), contentEncoding: payloadString(payload, "contentEncoding"), cacheDecision: payloadString(payload, "cacheDecision"),
+    return { key, events: ordered, sessionId: terminal.sessionId, executionId: executionIdFor(terminal), inspectionId: String(payload.inspectionId ?? "Unavailable"), url: String(payload.url ?? payload.requestedUrl ?? "Unavailable"), method: String(payload.method ?? "GET"), resourceType: payloadString(payload, "resourceType"), requestId: typeof payload.requestId === "number" ? payload.requestId : undefined, frameId: typeof payload.frameId === "number" ? payload.frameId : undefined, loaderId: typeof payload.loaderId === "number" ? payload.loaderId : undefined, protocol: String(payload.httpVersion ?? "Unavailable"), remoteIp: String(payload.primaryIp ?? "Unavailable"), connectionId: payload.connectionId == null ? undefined : String(payload.connectionId), statusCode: typeof payload.responseStatus === "number" && payload.responseStatus > 0 ? payload.responseStatus : undefined, responseBytes: latestPayloadNumber(ordered, "responseBodyBytes"), duration: ordered.reduce((sum, event) => sum + Math.max(0, event.duration), 0), terminalStatus: statusEvent || payload.terminalStatus === "error" ? "error" : "ok", connectionReused: payload.connectionReused === true, usedProxy: payload.usedProxy === true, redirectCount: typeof payload.redirectCount === "number" ? payload.redirectCount : undefined, contentType: payloadString(payload, "contentType"), contentEncoding: payloadString(payload, "contentEncoding"), cacheDecision: payloadString(payload, "cacheDecision"),
       requestHeaders: payloadString(payload, "requestHeaders"),
       responseHeaders: payloadString(payload, "responseHeaders"),
       requestBody: payloadString(payload, "requestBody") ?? payloadString(payload, "postData"),
@@ -890,13 +895,13 @@ function aggregateNetworkRequests(events: TelemetryEvent[]) {
   }).sort((a, b) => (b.events.at(-1)?.timestamp ?? 0) - (a.events.at(-1)?.timestamp ?? 0));
 }
 
-function NetworkOverview({ request }: { request: NetworkRequest }) { return <div className="network-detail-grid"><NetworkFact label="Request method" value={request.method}/><NetworkFact label="Response status" value={request.statusCode == null ? "Unavailable" : String(request.statusCode)}/><NetworkFact label="Remote address" value={request.remoteIp}/><NetworkFact label="Connection" value={request.connectionId ?? "Unavailable"}/><NetworkFact label="Connection reused" value={request.connectionReused ? "Yes" : "No / unavailable"}/><NetworkFact label="Proxy used" value={request.usedProxy ? "Yes" : "No"}/><NetworkFact label="Redirects" value={request.redirectCount == null ? "Unavailable" : String(request.redirectCount)}/><NetworkFact label="Cache decision" value={request.cacheDecision ?? "Unavailable"}/><NetworkFact label="Content type" value={request.contentType ?? "Unavailable"}/><NetworkFact label="Content encoding" value={request.contentEncoding ?? "Unavailable"}/><NetworkFact label="Response bytes" value={formatOptionalBytes(request.responseBytes)}/><NetworkFact label="Inspection" value={request.inspectionId}/>{request.failure && <div className="network-failure"><AlertTriangle size={15}/><span><strong>Transfer failed</strong><small>{request.failure}</small></span></div>}</div>; }
+function NetworkOverview({ request }: { request: NetworkRequest }) { return <div className="network-detail-grid"><NetworkFact label="Request method" value={request.method}/><NetworkFact label="Response status" value={request.statusCode == null ? "Unavailable" : String(request.statusCode)}/><NetworkFact label="Remote address" value={request.remoteIp}/><NetworkFact label="Connection" value={request.connectionId ?? "Unavailable"}/><NetworkFact label="Connection reused" value={request.connectionReused ? "Yes" : "No / unavailable"}/><NetworkFact label="Proxy used" value={request.usedProxy ? "Yes" : "No"}/><NetworkFact label="Redirects" value={request.redirectCount == null ? "Unavailable" : String(request.redirectCount)}/><NetworkFact label="Cache decision" value={request.cacheDecision ?? "Unavailable"}/><NetworkFact label="Content type" value={request.contentType ?? "Unavailable"}/><NetworkFact label="Content encoding" value={request.contentEncoding ?? "Unavailable"}/><NetworkFact label="Response bytes" value={formatOptionalBytes(request.responseBytes)}/><NetworkFact label="Execution" value={request.executionId}/>{request.failure && <div className="network-failure"><AlertTriangle size={15}/><span><strong>Transfer failed</strong><small>{request.failure}</small></span></div>}</div>; }
 
 function NetworkTiming({ request }: { request: NetworkRequest }) { const max = Math.max(...request.events.map((event) => event.duration), 1); return <div className="network-timing">{networkStageOrder.map((stage) => { const event = request.events.find((candidate) => String(candidate.payload.journeyStage ?? candidate.name) === stage); const measurement = String(event?.payload.measurement ?? "unavailable"); return <div key={stage} className={`network-timing__row network-timing__row--${event?.status ?? "missing"}`}><span>{stage}</span><div><i style={{ width: event && event.duration > 0 ? `${Math.max(2, event.duration / max * 100)}%` : "2%" }}/></div><strong>{!event ? "Not emitted" : measurement === "boundary" ? "Boundary" : measurement === "reused" ? "Reused" : event.duration > 0 ? `${event.duration.toFixed(3)} ms` : measurement}</strong></div>; })}<footer><span>Total measured stage duration</span><strong>{formatDuration(request.duration)}</strong></footer></div>; }
 
 function NetworkHeaders({ request }: { request: NetworkRequest }) {
   const captured = Object.entries(request.headers).filter((entry): entry is [string, string] => typeof entry[1] === "string");
-  const parseHeaderString = (raw: string) => raw.split("\n").map((line) => { const i = line.indexOf(":"); return i > 0 ? [line.slice(0, i).trim(), line.slice(i + 1).trim()] as [string, string] : null; }).filter(Boolean) as [string, string][];
+  const parseHeaderString = (raw: string) => raw.replaceAll("\\n", "\n").split("\n").map((line) => { const i = line.indexOf(":"); return i > 0 ? [line.slice(0, i).trim(), line.slice(i + 1).trim()] as [string, string] : null; }).filter(Boolean) as [string, string][];
   const reqHeaders = request.requestHeaders ? parseHeaderString(request.requestHeaders) : null;
   const resHeaders = request.responseHeaders ? parseHeaderString(request.responseHeaders) : null;
   return (
@@ -969,7 +974,7 @@ function NetworkResponse({ request }: { request: NetworkRequest }) {
         <div className="network-empty">
           <Database size={18} />
           <strong>No response body captured</strong>
-          <span>Response bodies are disabled by default to avoid storing page secrets. Set <code>KOKO_TELEMETRY_CAPTURE_BODIES=1</code> for truncated text/JSON capture; binary responses remain hidden.</span>
+          <span>This response has no displayable text body. Empty and binary responses remain hidden; text/JSON is captured automatically up to 4 MiB.</span>
         </div>
       )}
     </div>

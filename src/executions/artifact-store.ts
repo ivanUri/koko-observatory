@@ -68,6 +68,16 @@ export async function loadArtifacts() {
   return { executions, checkpoints, branches };
 }
 
+export async function loadRecentExecutionEvents(limit = 10_000) {
+  if (typeof window === "undefined") return [];
+  const records = await observatoryDb.executionEvents
+    .orderBy("timestamp")
+    .reverse()
+    .limit(limit)
+    .toArray();
+  return records.reverse().map((record) => record.event);
+}
+
 export async function persistCheckpoint(checkpoint: CheckpointRecord) {
   if (typeof window !== "undefined") await observatoryDb.checkpoints.put(checkpoint);
 }
