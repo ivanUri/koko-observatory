@@ -3,9 +3,9 @@
 import { memo, useEffect, useMemo, useState } from "react";
 import {
   Background, BaseEdge, Controls, EdgeLabelRenderer, Handle, MarkerType, MiniMap, NodeToolbar, Position, ReactFlow,
-  getSmoothStepPath, type Edge, type EdgeProps, type Node, type NodeProps, type ReactFlowInstance,
+  getBezierPath, type Edge, type EdgeProps, type Node, type NodeProps, type ReactFlowInstance,
 } from "@xyflow/react";
-import dagre from "@dagrejs/dagre";
+
 import "@xyflow/react/dist/style.css";
 import { useGraphStore, useSelectionStore, useTelemetryStore } from "@/src/stores";
 
@@ -13,21 +13,86 @@ export type ExecutionGraphMode = "causal" | "session" | "subsystems" | "neighbor
 
 type FlowData = { label: string; kind: string; duration: number; status: string; count?: number; aggregate?: boolean; journey?: string; stage?: string; process?: string; thread?: string; session?: string; sequence?: number; facts?: Array<[string,string]>; expandable?: boolean; expanded?: boolean };
 
+const JOURNEY_HUE: Record<string, string> = {
+  internet: "#3b8bd6",
+  browser:  "#42c997",
+  system:   "#a37bd3",
+  runtime:  "#d4a957",
+};
+
+const KIND_INITIALS: Record<string, string> = {
+  network: "Net", javascript: "JS", dom: "DOM", render: "Rdr",
+  navigation: "Nav", memory: "Mem", scheduler: "Sch", css: "CSS",
+};
+
 const TelemetryNode = memo(function TelemetryNode({ data, selected }: NodeProps) {
   const model = data as FlowData;
+  const journey = model.journey ?? "runtime";
+  const rail = JOURNEY_HUE[journey] ?? "#42c997";
+  const isError = model.status === "error";
+  const isWarn  = model.status === "warning";
+  const statusColor = isError ? "#ef6f78" : isWarn ? "#d4a957" : rail;
+  const badge = model.aggregate
+    ? String(model.count)
+    : (KIND_INITIALS[model.kind] ?? model.kind.slice(0, 3).toUpperCase());
+
+  if (model.aggregate) {
+    return <>
+      <NodeToolbar isVisible={selected} position={Position.Top}>
+        <div className="gn-tooltip">
+          <strong>{model.label}</strong>
+          <span>{model.count} correlated events · {model.duration.toFixed(1)} ms total</span>
+        </div>
+      </NodeToolbar>
+      <div className={`gn-agg${selected ? " gn-agg--selected" : ""}${isError ? " gn-agg--error" : isWarn ? " gn-agg--warn" : ""}`}
+        style={{ "--rail": rail } as React.CSSProperties}>
+        <Handle type="target" position={Position.Left} className="gn-handle" />
+        <span className="gn-agg__badge" style={{ background: rail }}>{badge}</span>
+        <div className="gn-agg__body">
+          <strong>{model.label}</strong>
+          <small>{model.count} events · {model.stage}</small>
+        </div>
+        <div className="gn-agg__stats">
+          <span style={{ color: "#ef6f78" }}>{model.process}</span>
+          <span style={{ color: "#d4a957" }}>{model.thread}</span>
+        </div>
+        <Handle type="source" position={Position.Right} className="gn-handle" />
+      </div>
+    </>;
+  }
+
   return <>
-    <NodeToolbar isVisible={selected} position={Position.Top}><span className="graph-node-toolbar">{model.aggregate ? `${model.count} correlated events` : `${model.kind} · ${model.duration.toFixed(3)} ms`}</span></NodeToolbar>
-    <article className={`graph-node graph-node--${model.status} ${model.aggregate ? "graph-node--aggregate" : ""} ${selected ? "graph-node--expanded" : ""}`} title={`${model.kind}: ${model.label} · ${model.duration.toFixed(1)} ms`}>
-      <Handle type="target" position={Position.Left}/><header><i>{model.aggregate ? model.count : nodeInitial(model.label, model.kind)}</i><span><strong>{model.label}</strong><small>{model.aggregate ? "Correlated subsystem" : `${model.journey} · ${model.kind}`}</small></span><b>{model.duration.toFixed(2)} ms{model.expandable && <em>{model.expanded ? "−" : "+"}</em>}</b></header>
-      <div className="graph-node__context"><span>{model.stage ?? "Stage unavailable"}</span><span>{model.process ?? "Process unavailable"}</span><span>{model.thread ?? "Thread unavailable"}</span></div>
-      {selected && !model.aggregate && <div className="graph-node__facts">{model.facts?.map(([key,value]) => <span key={key}><small>{key}</small><code>{value}</code></span>)}<span><small>Session</small><code>{model.session}</code></span><span><small>Sequence</small><code>#{model.sequence}</code></span></div>}
-      <Handle type="source" position={Position.Right}/>
-    </article>
+    <NodeToolbar isVisible={selected} position={Position.Top}>
+      <div className="gn-tooltip">
+        <strong>{model.label}</strong>
+        <span>{journey} · {model.kind} · {model.duration.toFixed(3)} ms · #{model.sequence}</span>
+        {model.stage && model.stage !== "Stage unavailable" && <span>{model.stage}</span>}
+        {model.process && model.process !== "Process unavailable" && <span>{model.process}</span>}
+      </div>
+    </NodeToolbar>
+    <div
+      className={`gn${selected ? " gn--selected" : ""}${isError ? " gn--error" : isWarn ? " gn--warn" : ""}${model.expandable ? " gn--expandable" : ""}`}
+      style={{ "--rail": rail, "--status": statusColor } as React.CSSProperties}
+      title={`${model.kind}: ${model.label} · ${model.duration.toFixed(1)} ms`}
+    >
+      <Handle type="target" position={Position.Left} className="gn-handle" />
+      <span className="gn__rail" />
+      <span className="gn__badge" style={{ background: `${rail}22`, color: rail, borderColor: `${rail}44` }}>{badge}</span>
+      <div className="gn__body">
+        <span className="gn__label">{model.label}</span>
+        <div className="gn__meta">
+          <i className={`gn__dot gn__dot--${model.status}`} />
+          <span>{model.duration.toFixed(1)} ms</span>
+          {model.expandable && <em className="gn__expand">{model.expanded ? "−" : "+"}</em>}
+        </div>
+      </div>
+      <Handle type="source" position={Position.Right} className="gn-handle" />
+    </div>
   </>;
 });
 
 function CausalEdge(props: EdgeProps) {
-  const [path, labelX, labelY] = getSmoothStepPath(props);
+  const [path, labelX, labelY] = getBezierPath(props);
   const relation = String(props.data?.relation ?? "parent");
   return <><BaseEdge path={path} markerEnd={props.markerEnd} className={`graph-edge graph-edge--${relation}`} style={props.style}/><EdgeLabelRenderer><span className={`graph-edge-label graph-edge-label--${relation}`} style={{ transform: `translate(-50%, -50%) translate(${labelX}px,${labelY}px)` }}>{relation}</span></EdgeLabelRenderer></>;
 }
@@ -38,54 +103,192 @@ export function ExecutionGraph({ mode, nodeIds, selectedId }: { mode: ExecutionG
   const events = useTelemetryStore((state) => state.events);
   const select = useSelectionStore((state) => state.select);
   const [flow, setFlow] = useState<{ nodes: Node[]; edges: Edge[] }>({ nodes: [], edges: [] });
-  const [expandedIds, setExpandedIds] = useState<Set<string> | null>(null);
   const [instance, setInstance] = useState<ReactFlowInstance | null>(null);
 
-  useEffect(() => {
-    if (expandedIds || !graphNodes.length) return;
-    const visibleIds = new Set(graphNodes.filter((node) => nodeIds.has(node.id)).map((node) => node.id));
-    const linked = graphEdges.filter((edge) => visibleIds.has(edge.source) && visibleIds.has(edge.target));
-    const targets = new Set(linked.map((edge) => edge.target));
-    setExpandedIds(new Set(graphNodes.filter((node) => visibleIds.has(node.id) && !targets.has(node.id)).map((node) => node.id)));
-  }, [expandedIds, graphEdges, graphNodes, nodeIds]);
-
   const model = useMemo(() => {
-    const eventById = new Map(events.map((event) => [event.id, event]));
+    const eventById = new Map(events.map((e) => [e.id, e]));
     const visible = graphNodes.filter((node) => nodeIds.has(node.id)).slice(-300);
-    const visibleIds = new Set(visible.map((node) => node.id));
-    const linked = graphEdges.filter((edge) => visibleIds.has(edge.source) && visibleIds.has(edge.target));
+    const visibleIds = new Set(visible.map((n) => n.id));
+    const linked = graphEdges.filter((e) => visibleIds.has(e.source) && visibleIds.has(e.target));
     if (mode === "subsystems") return aggregateSubsystems(visible, linked, eventById);
-    const scoped = mode === "neighborhood" && selectedId ? neighborhood(visible, linked, selectedId, 2) : mode === "causal" || mode === "session" ? expandedGraph(visible, linked, expandedIds ?? new Set()) : { nodes: visible, edges: linked };
-    const expandable = new Set(linked.map((edge) => edge.source));
+    const scoped = mode === "neighborhood" && selectedId ? neighborhood(visible, linked, selectedId, 2) : { nodes: visible, edges: linked };
+    const compact = collapseNetworkRequests(scoped.nodes, scoped.edges, eventById);
     return {
-      nodes: scoped.nodes.map((node) => { const event = eventById.get(node.id); const payload = event?.payload ?? {}; return { id: node.id, type: "telemetry", position: { x: 0, y: 0 }, selected: node.id === selectedId, data: { ...node, journey: event ? eventJourney(event) : "runtime", stage: String(payload.browserStage ?? payload.systemStage ?? payload.journeyStage ?? "Stage unavailable"), process: String(payload.processName ?? payload.processId ?? "Process unavailable"), thread: String(payload.threadName ?? payload.thread ?? payload.threadId ?? "Thread unavailable"), session: event?.sessionId ?? "Unavailable", sequence: event?.sequence ?? 0, facts: payloadFacts(payload), expandable: expandable.has(node.id), expanded: expandedIds?.has(node.id) ?? false } }; }),
-      edges: scoped.edges.map((edge) => { const relation = edge.relation === "sequence" ? "next" : edgeRelation(eventById.get(edge.target)); return { ...edge, type: "causal", label: relation, data: { relation }, markerEnd: { type: MarkerType.ArrowClosed } }; }),
+      nodes: compact.nodes.map((node) => {
+        const event = eventById.get(node.id);
+        const payload = event?.payload ?? {};
+        return {
+          id: node.id, type: "telemetry", position: { x: 0, y: 0 }, selected: node.id === selectedId,
+          data: { ...node, journey: event ? eventJourney(event) : "runtime", stage: String(payload.browserStage ?? payload.systemStage ?? payload.journeyStage ?? "Stage unavailable"), process: String(payload.processName ?? payload.processId ?? "Process unavailable"), thread: String(payload.threadName ?? payload.thread ?? payload.threadId ?? "Thread unavailable"), session: event?.sessionId ?? "Unavailable", sequence: event?.sequence ?? 0, facts: payloadFacts(payload) },
+        };
+      }),
+      edges: compact.edges.map((edge) => {
+        const relation = edge.relation === "sequence" ? "next" : edgeRelation(eventById.get(edge.target));
+        return { ...edge, type: "causal", label: relation, data: { relation }, markerEnd: { type: MarkerType.ArrowClosed } };
+      }),
     };
-  }, [events, expandedIds, graphEdges, graphNodes, mode, nodeIds, selectedId]);
+  }, [events, graphEdges, graphNodes, mode, nodeIds, selectedId]);
 
   useEffect(() => {
     let cancelled = false;
-    const direction = mode === "session" ? "TB" : "LR";
-    const run = Promise.resolve(dagreLayout(model.nodes, model.edges, direction));
-    void run.then((next) => { if (!cancelled) setFlow(next); });
+    const eventById = new Map(events.map((e) => [e.id, e]));
+    void Promise.resolve(ownerTimelineLayout(model.nodes, model.edges, eventById)).then((next) => { if (!cancelled) setFlow(next); });
     return () => { cancelled = true; };
-  }, [mode, model]);
+  }, [events, model]);
 
-  useEffect(() => { if (!instance || !flow.nodes.length) return; const frame = window.requestAnimationFrame(() => void instance.fitView({ padding: .18, duration: 280 })); return () => window.cancelAnimationFrame(frame); }, [flow.nodes.length, instance]);
+  useEffect(() => {
+    if (!instance || !flow.nodes.length) return;
+    const frame = window.requestAnimationFrame(() => void instance.fitView({ padding: .18, duration: 300 }));
+    return () => window.cancelAnimationFrame(frame);
+  }, [flow.nodes.length, instance]);
 
-  return <div className="graph-canvas"><ReactFlow nodes={flow.nodes} edges={flow.edges} nodeTypes={{ telemetry: TelemetryNode }} edgeTypes={{ causal: CausalEdge }} onInit={setInstance} onNodeClick={(_, node) => { if (String(node.id).startsWith("subsystem:")) return; select(node.id); if ((mode === "causal" || mode === "session") && node.data.expandable) setExpandedIds((current) => { const next = new Set(current ?? []); if (next.has(node.id)) next.delete(node.id); else next.add(node.id); return next; }); }} minZoom={.08} maxZoom={2} fitView fitViewOptions={{ padding: .18 }} nodesDraggable={false} onlyRenderVisibleElements>
-    <Background color="#252b34" gap={24} size={1}/><MiniMap pannable zoomable maskColor="rgba(8,10,12,.78)" nodeColor={(node) => node.data?.status === "error" ? "#dd7777" : "#42c997"}/><Controls className="observatory-controls"/>
+  return <div className="graph-canvas"><ReactFlow
+    nodes={flow.nodes} edges={flow.edges}
+    nodeTypes={{ telemetry: TelemetryNode }} edgeTypes={{ causal: CausalEdge }}
+    onInit={setInstance}
+    onNodeClick={(_, node) => { if (!String(node.id).startsWith("subsystem:")) select(node.id); }}
+    minZoom={.04} maxZoom={3} fitView fitViewOptions={{ padding: .18 }}
+    nodesDraggable={false} onlyRenderVisibleElements
+  >
+    <Background color="#0e1820" gap={20} size={1} style={{ background: "#060c13" }} />
+    <MiniMap pannable zoomable maskColor="rgba(6,12,19,.82)"
+      nodeColor={(node) => { const j = String(node.data?.journey ?? "runtime"); return node.data?.status === "error" ? "#ef6f78" : node.data?.status === "warning" ? "#d4a957" : (({ internet: "#3b8bd6", browser: "#42c997", system: "#a37bd3", runtime: "#d4a957" } as Record<string,string>)[j] ?? "#42c997"); }}
+      style={{ background: "#060c13", border: "1px solid #1e2b35" }}
+    />
+    <Controls className="observatory-controls" />
   </ReactFlow></div>;
 }
 
-function dagreLayout(nodes: Node[], edges: Edge[], rankdir: "LR" | "TB") {
-  const engine = new dagre.graphlib.Graph().setDefaultEdgeLabel(() => ({}));
-  engine.setGraph({ rankdir, ranksep: 105, nodesep: 58 });
-  nodes.forEach((node) => engine.setNode(node.id, { width: node.data.aggregate ? 230 : 280, height: node.selected ? 238 : 112 }));
-  edges.forEach((edge) => engine.setEdge(edge.source, edge.target));
-  dagre.layout(engine);
-  return { nodes: nodes.map((node) => { const point = engine.node(node.id) ?? { x: 0, y: 0 }; const width = node.data.aggregate ? 230 : 280; const height = node.selected ? 238 : 112; return { ...node, position: { x: point.x-width/2, y: point.y-height/2 } }; }), edges };
+/* ─── Timeline-by-owner layout ────────────────────────────────────────────── */
+
+const LANE_H    = 64;   // total height per lane (px)
+const NODE_H    = 40;   // node box height (px)
+const NODE_W    = 172;  // base node width (px)
+const LABEL_W   = 110;  // left gutter for lane labels
+const MIN_GAP   = 6;    // min horizontal gap between nodes in same lane
+
+type SwimlaneEventById = Map<string, ReturnType<typeof useTelemetryStore.getState>["events"][number]>;
+
+function ownerTimelineKey(node: Node, eventById: SwimlaneEventById): string {
+  const event = eventById.get(node.id);
+  const p = event?.payload;
+  if (event?.kind === "network") return `Network · connection ${String(p?.connectionId ?? "unknown")}`;
+  const process = String(p?.processName ?? p?.process ?? "Browser runtime");
+  const thread = String(p?.threadName ?? p?.thread ?? p?.threadId ?? "main");
+  return `${process} · ${thread}`;
 }
+
+type GraphSourceNode = { id: string; label: string; kind: string; duration: number; status: string; count?: number; aggregate?: boolean; stage?: string };
+type GraphSourceEdge = { id: string; source: string; target: string; relation?: string };
+
+function collapseNetworkRequests(nodes: GraphSourceNode[], edges: GraphSourceEdge[], eventById: SwimlaneEventById) {
+  const members = new Map<string, GraphSourceNode[]>();
+  for (const node of nodes) {
+    const event = eventById.get(node.id);
+    const requestId = event?.payload.requestId;
+    if (event?.kind !== "network" || (typeof requestId !== "number" && typeof requestId !== "string")) continue;
+    const key = `${event.sessionId}:${String(requestId)}`;
+    members.set(key, [...(members.get(key) ?? []), node]);
+  }
+
+  const representative = new Map<string, string>();
+  const collapsed = new Map<string, GraphSourceNode>();
+  for (const group of members.values()) {
+    const ordered = [...group].sort((left, right) => (eventById.get(left.id)?.sequence ?? 0) - (eventById.get(right.id)?.sequence ?? 0));
+    const terminal = ordered.find((node) => String(eventById.get(node.id)?.payload.journeyStage) === "received") ?? ordered.at(-1)!;
+    const event = eventById.get(terminal.id)!;
+    const payload = event.payload;
+    const measuredDuration = ordered.reduce((sum, node) => {
+      const member = eventById.get(node.id);
+      const measurement = String(member?.payload.measurement ?? "").toLowerCase();
+      return ["unavailable", "not-timed", "boundary"].includes(measurement) ? sum : sum + Math.max(0, member?.duration ?? 0);
+    }, 0);
+    const url = typeof payload.url === "string" ? requestLabel(payload.url) : "HTTP request";
+    const method = typeof payload.method === "string" ? payload.method : "HTTP";
+    const status = ordered.some((node) => node.status === "error") ? "error" : ordered.some((node) => node.status === "warning") ? "warning" : "ok";
+    collapsed.set(terminal.id, { ...terminal, label: `${method} ${url}`, duration: measuredDuration, status, count: ordered.length, aggregate: true, stage: `${ordered.length} network stages` } as GraphSourceNode);
+    for (const node of ordered) representative.set(node.id, terminal.id);
+  }
+
+  const visible = nodes.filter((node) => !representative.has(node.id) || representative.get(node.id) === node.id).map((node) => collapsed.get(node.id) ?? node);
+  const deduped = new Map<string, GraphSourceEdge>();
+  for (const edge of edges) {
+    const source = representative.get(edge.source) ?? edge.source;
+    const target = representative.get(edge.target) ?? edge.target;
+    if (source === target) continue;
+    const key = `${source}:${target}:${edge.relation ?? "parent"}`;
+    deduped.set(key, { ...edge, id: `collapsed:${key}`, source, target });
+  }
+  return { nodes: visible, edges: [...deduped.values()] };
+}
+
+function requestLabel(value: string) {
+  try {
+    const url = new URL(value);
+    return `${url.hostname}${url.pathname === "/" ? "" : url.pathname}`;
+  } catch {
+    return value;
+  }
+}
+
+function ownerTimelineLayout(nodes: Node[], causalEdges: Edge[], eventById: SwimlaneEventById): { nodes: Node[]; edges: Edge[] } {
+  if (!nodes.length) return { nodes, edges: causalEdges };
+
+  // 1. Determine lanes (ordered by first appearance)
+  const laneOrder: string[] = [];
+  const laneSet = new Set<string>();
+  for (const node of nodes) {
+    const key = ownerTimelineKey(node, eventById);
+    if (!laneSet.has(key)) { laneSet.add(key); laneOrder.push(key); }
+  }
+
+  // 2. Resolve timestamps
+  const getTs = (node: Node) => eventById.get(node.id)?.timestamp ?? 0;
+  const timestamps = nodes.map(getTs).filter((t) => t > 0);
+  const tMin = timestamps.length ? Math.min(...timestamps) : 0;
+  const tMax = timestamps.length ? Math.max(...timestamps) : 1;
+  const tRange = Math.max(1, tMax - tMin);
+
+  // 3. Scale: fit into a canvas that's at least 1600px wide
+  const CANVAS_W = Math.max(1600, nodes.length * (NODE_W * 0.4));
+  const scale = (CANVAS_W - LABEL_W - NODE_W) / tRange;
+
+  // 4. Build per-lane sorted node lists to detect collisions
+  const laneNodes = new Map<string, Array<{ node: Node; t: number }>>();
+  for (const node of nodes) {
+    const key = ownerTimelineKey(node, eventById);
+    const t = getTs(node) - tMin;
+    const arr = laneNodes.get(key) ?? [];
+    arr.push({ node, t });
+    laneNodes.set(key, arr);
+  }
+  for (const arr of laneNodes.values()) arr.sort((a, b) => a.t - b.t);
+
+  // 5. Resolve X positions (push right if overlapping in same lane)
+  const resolvedX = new Map<string, number>();
+  for (const arr of laneNodes.values()) {
+    let prevRight = -Infinity;
+    for (const { node, t } of arr) {
+      const rawX = LABEL_W + t * scale;
+      const x = Math.max(rawX, prevRight + MIN_GAP);
+      resolvedX.set(node.id, x);
+      prevRight = x + NODE_W;
+    }
+  }
+
+  // 6. Position nodes
+  const laneIndex = new Map(laneOrder.map((k, i) => [k, i]));
+  const positionedNodes: Node[] = nodes.map((node) => {
+    const key = ownerTimelineKey(node, eventById);
+    const lane = laneIndex.get(key) ?? 0;
+    const x = resolvedX.get(node.id) ?? LABEL_W;
+    const y = lane * LANE_H + (LANE_H - NODE_H) / 2;
+    return { ...node, position: { x, y } };
+  });
+
+  return { nodes: positionedNodes, edges: causalEdges };
+}
+
 
 function neighborhood<T extends { id: string }>(nodes: T[], edges: Array<{ id: string; source: string; target: string; relation?: string }>, center: string, depth: number) {
   const ids = new Set([center]); let frontier = new Set([center]);
@@ -93,15 +296,7 @@ function neighborhood<T extends { id: string }>(nodes: T[], edges: Array<{ id: s
   return { nodes: nodes.filter((node) => ids.has(node.id)), edges: edges.filter((edge) => ids.has(edge.source) && ids.has(edge.target)) };
 }
 
-function expandedGraph<T extends { id: string }>(nodes: T[], edges: Array<{ id: string; source: string; target: string; relation?: string }>, expanded: Set<string>) {
-  const nodeIds = new Set(nodes.map((node) => node.id));
-  const targets = new Set(edges.map((edge) => edge.target));
-  const roots = nodes.filter((node) => !targets.has(node.id)).map((node) => node.id);
-  const visible = new Set(roots.length ? roots : nodes.slice(0,1).map((node) => node.id));
-  const queue = [...visible];
-  while (queue.length) { const id = queue.shift()!; if (!expanded.has(id)) continue; for (const edge of edges) if (edge.source === id && nodeIds.has(edge.target) && !visible.has(edge.target)) { visible.add(edge.target); queue.push(edge.target); } }
-  return { nodes: nodes.filter((node) => visible.has(node.id)), edges: edges.filter((edge) => visible.has(edge.source) && visible.has(edge.target)) };
-}
+
 
 function aggregateSubsystems(nodes: Array<{ id: string; label: string; kind: string; duration: number; status: string }>, edges: Array<{ id: string; source: string; target: string }>, eventById: Map<string, ReturnType<typeof useTelemetryStore.getState>["events"][number]>) {
   const key = (id: string, fallback: string) => { const event = eventById.get(id); return String(event?.payload.processName ?? event?.payload.systemStage ?? event?.payload.browserStage ?? fallback); };

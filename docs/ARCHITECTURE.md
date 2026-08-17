@@ -1,4 +1,4 @@
-# Velora Observatory Architecture
+# Koko Observatory Architecture
 
 ## Layering
 
@@ -13,7 +13,7 @@ Parser → normalizer → event bus → worker → indexed stores
     ↓
 Transport interface
     ↓
-Velora / Chrome / remote browser / browser cluster
+Koko / Chrome / remote browser / browser cluster
 ```
 
 The browser runtime never imports the Observatory UI. A transport adapter is
@@ -70,7 +70,7 @@ Compatibility, Performance, and AI can ship as independent plugins.
 
 ## Production integration
 
-The current demo transport is intentionally replaceable. Connecting Velora
+The current demo transport is intentionally replaceable. Connecting Koko
 requires a telemetry WebSocket endpoint that emits the normalized event
 envelope in `src/core/types.ts`. Binary framing can be introduced inside the
 parser while preserving the same worker and UI contract.

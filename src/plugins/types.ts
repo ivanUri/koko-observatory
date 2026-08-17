@@ -9,4 +9,5 @@ export interface ObservatoryPlugin {
   icon: LucideIcon;
   component: ComponentType;
   badge?: string;
+  sidebar?: boolean;
 }

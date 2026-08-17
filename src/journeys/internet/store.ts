@@ -173,7 +173,7 @@ export const useInternetJourneyStore = create<InternetJourneyState>((set) => ({
       ];
       if (stage === "cache") node.metadata.summary = [
         { label: "Decision", value: typeof payload.cacheDecision === "string" ? payload.cacheDecision : "Unavailable" },
-        { label: "Status", value: payload.responseStatus === 304 ? "Revalidated" : "Network response" },
+        { label: "Status", value: payload.responseStatus === 304 ? "Revalidated" : "Cache source not observable" },
       ];
       if (stage === "routing") node.metadata.summary = [
         { label: "Route hops", value: "Unavailable without traceroute" },

@@ -18,8 +18,8 @@ test("server-renders the Observatory product shell", async () => {
   assert.equal(response.status, 200);
   assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
   const html = await response.text();
-  assert.match(html, /<title>Velora Observatory<\/title>/i);
-  assert.match(html, /Velora runtime monitor/);
+  assert.match(html, /<title>Koko Observatory<\/title>/i);
+  assert.match(html, /Koko runtime monitor/);
   assert.match(html, /Event throughput/);
   assert.match(html, /Observatory plugins/);
   assert.doesNotMatch(html, /codex-preview|react-loading-skeleton/i);
@@ -44,7 +44,7 @@ test("Overview derives operational metrics from telemetry", async () => {
   const [panels, worker, bridge] = await Promise.all([
     readFile(new URL("../src/components/panels.tsx", import.meta.url), "utf8"),
     readFile(new URL("../src/workers/telemetry.worker.ts", import.meta.url), "utf8"),
-    readFile(new URL("../scripts/velora-telemetry-bridge.mjs", import.meta.url), "utf8"),
+    readFile(new URL("../scripts/koko-telemetry-bridge.mjs", import.meta.url), "utf8"),
   ]);
   assert.match(panels, /latestNumber\(events/);
   assert.match(panels, /percentile\(events/);
@@ -68,7 +68,7 @@ test("URL inspection is global and not duplicated in Internet Journey", async ()
     readFile(new URL("../src/journeys/internet/internet-journey-panel.tsx", import.meta.url), "utf8"),
   ]);
   assert.match(shell, /GlobalInspector/);
-  assert.match(shell, /velora:inspect-url/);
+  assert.match(shell, /koko:inspect-url/);
   assert.match(shell, /Global URL inspector/);
   assert.doesNotMatch(journey, /Inspect URL/);
 });
@@ -80,7 +80,7 @@ test("Console renders telemetry instead of a decorative command shell", async ()
   assert.match(tooling, /Export JSONL/);
   assert.match(tooling, /Open in Event Inspector/);
   assert.match(tooling, /slice\(-1_000\)/);
-  assert.doesNotMatch(tooling, /velora-runtime — zsh|remote commands/);
+  assert.doesNotMatch(tooling, /koko-runtime — zsh|remote commands/);
 });
 
 test("Event Inspector selects real events and exposes typed evidence", async () => {

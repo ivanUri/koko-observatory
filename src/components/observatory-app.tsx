@@ -1,21 +1,50 @@
 "use client";
 
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { motion } from "framer-motion";
-import { Box, Clock3, Cpu, Globe2, Settings, Sparkles } from "lucide-react";
+import { ChevronDown, Clock3, Database, FileDown, Globe2, Settings, Sparkles, SlidersHorizontal } from "lucide-react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { DemoTransport, WebSocketTransport } from "@/src/core/transport";
 import { TelemetryPipeline } from "@/src/core/pipeline";
 import { observatoryBus } from "@/src/core/event-bus";
 import { getPlugin, plugins } from "@/src/plugins/registry";
-import { useGraphStore, useTelemetryStore, useUIStore } from "@/src/stores";
+import { useExportStore, useGraphStore, useTelemetryStore, useUIStore } from "@/src/stores";
 import { useInternetJourneyStore } from "@/src/journeys/internet/store";
 import { useBrowserJourneyStore } from "@/src/journeys/browser/store";
+import { useExecutionStore } from "@/src/executions/store";
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { staleTime: 30_000, refetchOnWindowFocus: false } },
 });
+
+type WaitUntil = "load" | "domcontentloaded" | "networkidle" | "domstable" | "done";
+
+interface InspectOptions {
+  waitUntil: WaitUntil;
+  waitMs: number;
+  terminateMs: number;
+  waitSelector: string;
+  waitScript: string;
+  userAgent: string;
+  extraHeaders: string;
+  cookiePath: string;
+  cookieJson: string;
+  includeFrames: boolean;
+}
+
+const defaultInspectOptions: InspectOptions = {
+  waitUntil: "domstable",
+  waitMs: 30_000,
+  terminateMs: 90_000,
+  waitSelector: "",
+  waitScript: "",
+  userAgent: "",
+  extraHeaders: "",
+  cookiePath: "",
+  cookieJson: "",
+  includeFrames: false,
+};
 
 export function ObservatoryApp({ initialPlugin = "overview" }: { initialPlugin?: string }) {
   return (
@@ -33,17 +62,29 @@ function ObservatoryRuntime({ initialPlugin }: { initialPlugin: string }) {
   const plugin = getPlugin(activePlugin);
   const ActivePanel = plugin.component;
   const pipeline = useMemo(() => {
-    const endpoint = process.env.NEXT_PUBLIC_VELORA_TELEMETRY_URL ?? "ws://127.0.0.1:9223/telemetry";
-    const demo = process.env.NEXT_PUBLIC_VELORA_DEMO === "1";
+    const endpoint = process.env.NEXT_PUBLIC_KOKO_TELEMETRY_URL;
+    // The UI is also expected to work when started without the optional
+    // telemetry bridge. Keep that local standalone mode on demo transport.
+    const demo = process.env.NEXT_PUBLIC_KOKO_DEMO === "1" || !endpoint;
     return new TelemetryPipeline(demo ? new DemoTransport() : new WebSocketTransport(endpoint));
   }, []);
   useEffect(() => setActivePlugin(initialPlugin), [initialPlugin, setActivePlugin]);
 
   useEffect(() => {
     const unsubscribeStatus = observatoryBus.on("status", (status) => useTelemetryStore.getState().setStatus(status));
+    const unsubscribeExportProgress = observatoryBus.on("exportProgress", (event) => {
+      useExportStore.getState().setProgress(event);
+    });
     const unsubscribe = observatoryBus.on("snapshot", (snapshot) => {
       useTelemetryStore.getState().append(snapshot.events, snapshot.rates, snapshot.p95);
       useGraphStore.getState().update(snapshot.graphNodes, snapshot.graphEdges);
+      useExecutionStore.getState().ingest(snapshot.events);
+      if (snapshot.events.some((event) => event.name === "inspection-started")) {
+        useExportStore.getState().setProgress(undefined);
+      }
+      if (snapshot.events.some((event) => event.name === "site-export-ready")) {
+        useExportStore.getState().setProgress(undefined);
+      }
       const terminal = snapshot.events.find((event) => event.payload.inspectionState === "completed" || event.payload.inspectionState === "failed");
       if (terminal) useUIStore.getState().setInspecting(false);
     });
@@ -55,12 +96,20 @@ function ObservatoryRuntime({ initialPlugin }: { initialPlugin: string }) {
       useTelemetryStore.getState().setStatus("offline");
       useUIStore.getState().setInspecting(false);
     });
-    const inspect = (event: Event) => pipeline.send(JSON.stringify({ type: "inspect-url", url: (event as CustomEvent<string>).detail }));
-    window.addEventListener("velora:inspect-url", inspect);
+    const inspect = (event: Event) => {
+      const detail = (event as CustomEvent<{ url: string; options?: InspectOptions } | string>).detail;
+      const command = typeof detail === "string" ? { type: "inspect-url", url: detail } : { type: "inspect-url", url: detail.url, options: detail.options };
+      pipeline.send(JSON.stringify(command));
+    };
+    const replay = (event: Event) => pipeline.send(JSON.stringify({ type: "execution.replay", ...(event as CustomEvent<Record<string, unknown>>).detail }));
+    window.addEventListener("koko:inspect-url", inspect);
+    window.addEventListener("koko:execution-replay", replay);
     return () => {
-      window.removeEventListener("velora:inspect-url", inspect);
+      window.removeEventListener("koko:inspect-url", inspect);
+      window.removeEventListener("koko:execution-replay", replay);
       unsubscribe();
       unsubscribeStatus();
+      unsubscribeExportProgress();
       unsubscribeRaw();
       pipeline.stop();
     };
@@ -81,12 +130,12 @@ function ObservatoryRuntime({ initialPlugin }: { initialPlugin: string }) {
     <div className={collapsed ? "observatory observatory--collapsed" : "observatory"}>
       <aside className="sidebar">
         <div className="brand">
-          {!collapsed && <div><strong>Velora Observatory</strong><small>Browser runtime monitor</small></div>}
+          {!collapsed && <div><strong>Koko Observatory</strong><small>Browser runtime monitor</small></div>}
           <button className="sidebar-toggle" onClick={toggleSidebar} aria-label="Toggle sidebar">‹</button>
         </div>
         <nav className="nav-section" aria-label="Observatory plugins">
           {!collapsed && <span className="nav-label">Workspace</span>}
-          {plugins.map(({ id, route, label, icon: Icon, badge }) => (
+          {plugins.filter((item) => item.sidebar !== false).map(({ id, route, label, icon: Icon, badge }) => (
             <Link key={id} href={route} className={activePlugin === id ? "nav-item nav-item--active" : "nav-item"} title={label}>
               <Icon size={16} /><span>{label}</span>{badge && <em>{badge}</em>}
             </Link>
@@ -94,8 +143,8 @@ function ObservatoryRuntime({ initialPlugin }: { initialPlugin: string }) {
         </nav>
         <nav className="nav-section nav-section--secondary">
           {!collapsed && <span className="nav-label">Runtime</span>}
-          <button className="nav-item"><Cpu size={16} /><span>Performance</span></button>
-          <button className="nav-item"><Box size={16} /><span>Compatibility</span></button>
+          <Link href="/application" className={activePlugin === "application" ? "nav-item nav-item--active" : "nav-item"} title="Application"><Database size={16} /><span>Application</span></Link>
+          <Link href="/export" className={activePlugin === "export" ? "nav-item nav-item--active" : "nav-item"} title="Export"><FileDown size={16} /><span>Export</span></Link>
           <button className="nav-item"><Sparkles size={16} /><span>AI insights</span><em>Beta</em></button>
         </nav>
         <div className="sidebar-footer">
@@ -117,6 +166,8 @@ function GlobalInspector() {
   const url = useUIStore((state) => state.inspectorUrl);
   const inspecting = useUIStore((state) => state.inspecting);
   const setUrl = useUIStore((state) => state.setInspectorUrl);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [options, setOptions] = useState<InspectOptions>(defaultInspectOptions);
   const submit = (event: React.FormEvent) => {
     event.preventDefault();
     if (!url.trim() || inspecting) return;
@@ -128,11 +179,31 @@ function GlobalInspector() {
       return;
     }
     useUIStore.getState().setInspecting(true);
-    window.dispatchEvent(new CustomEvent("velora:inspect-url", { detail: url }));
+    window.dispatchEvent(new CustomEvent("koko:inspect-url", { detail: { url, options } }));
   };
+  const update = <K extends keyof InspectOptions>(key: K, value: InspectOptions[K]) => setOptions((current) => ({ ...current, [key]: value }));
   return <form className={inspecting ? "global-inspector global-inspector--loading" : "global-inspector"} onSubmit={submit} aria-label="Global URL inspector">
-    <Globe2 size={14} />
-    <input value={url} onChange={(event) => setUrl(event.target.value)} aria-label="Global URL to inspect" placeholder="https://example.com" />
-    <button type="submit" disabled={inspecting}>{inspecting ? "Inspecting…" : "Inspect URL"}</button>
+    <div className="global-inspector__bar">
+      <Globe2 size={14} />
+      <input value={url} onChange={(event) => setUrl(event.target.value)} aria-label="Global URL to inspect" placeholder="https://example.com" />
+      <button type="button" className="global-inspector__advanced-toggle" onClick={() => setAdvancedOpen((open) => !open)} aria-expanded={advancedOpen}><SlidersHorizontal size={13} />Advanced<ChevronDown size={13} className={advancedOpen ? "global-inspector__chevron global-inspector__chevron--open" : "global-inspector__chevron"} /></button>
+      <button type="submit" disabled={inspecting}>{inspecting ? "Inspecting…" : "Inspect URL"}</button>
+    </div>
+    {advancedOpen && <section className="global-inspector__advanced" aria-label="Advanced inspection options">
+      <header><div><strong>Advanced run options</strong><span>These values apply to the next Inspect URL run.</span></div><button type="button" className="global-inspector__reset" onClick={() => setOptions(defaultInspectOptions)}>Reset</button></header>
+      <div className="global-inspector__fields">
+        <label><span>Wait until</span><select value={options.waitUntil} onChange={(event) => update("waitUntil", event.target.value as WaitUntil)}><option value="load">load</option><option value="domcontentloaded">domcontentloaded</option><option value="networkidle">networkidle</option><option value="domstable">domstable</option><option value="done">done</option></select></label>
+        <label><span>Wait timeout (ms)</span><input type="number" min="0" step="1000" value={options.waitMs} onChange={(event) => update("waitMs", Math.max(0, Number(event.target.value) || 0))} /></label>
+        <label><span>Terminate deadline (ms) <small>0 = disabled</small></span><input type="number" min="0" step="1000" value={options.terminateMs} onChange={(event) => update("terminateMs", Math.max(0, Number(event.target.value) || 0))} /></label>
+        <label><span>User-Agent override</span><input value={options.userAgent} onChange={(event) => update("userAgent", event.target.value)} placeholder="Optional Koko-compatible UA" /></label>
+        <label><span>Wait for selector</span><input value={options.waitSelector} onChange={(event) => update("waitSelector", event.target.value)} placeholder=".app-ready" /></label>
+        <label><span>Cookie JSON path</span><input value={options.cookiePath} onChange={(event) => update("cookiePath", event.target.value)} placeholder="/path/to/cookies.json" /></label>
+        <label><span>Import cookie JSON <small>optional file upload</small></span><input type="file" accept="application/json,.json" onChange={(event) => { const file = event.target.files?.[0]; if (!file) return; void file.text().then((value) => { update("cookieJson", value); update("cookiePath", ""); }); }} /></label>
+        <label className="global-inspector__checkbox"><span>Include iframe documents</span><input type="checkbox" checked={options.includeFrames} onChange={(event) => update("includeFrames", event.target.checked)} /></label>
+        <label className="global-inspector__field--wide"><span>Wait script (optional expression)</span><input value={options.waitScript} onChange={(event) => update("waitScript", event.target.value)} placeholder="window.__APP_READY__ === true" /></label>
+        <label className="global-inspector__field--wide"><span>Fixed request headers <small>Name: value, one per line</small></span><textarea value={options.extraHeaders} onChange={(event) => update("extraHeaders", event.target.value)} placeholder={"Authorization: Bearer …\nX-Demo-Run: true"} rows={3} /></label>
+      </div>
+      <p className="global-inspector__hint">Custom headers are applied to navigation and subresources. Cookie files must be readable by the telemetry bridge process.</p>
+    </section>}
   </form>;
 }

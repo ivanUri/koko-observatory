@@ -20,11 +20,21 @@ export class WebSocketTransport implements Transport {
     await new Promise<void>((resolve, reject) => {
       this.socket = new WebSocket(this.url);
       this.socket.binaryType = "arraybuffer";
+      const timeout = window.setTimeout(() => {
+        this.socket?.close();
+        this.state = "closed";
+        reject(new Error(`Telemetry transport timeout: ${this.url}`));
+      }, 5_000);
       this.socket.onopen = () => {
+        window.clearTimeout(timeout);
         this.state = "open";
         resolve();
       };
-      this.socket.onerror = () => reject(new Error("Telemetry transport failed"));
+      this.socket.onerror = () => {
+        window.clearTimeout(timeout);
+        this.state = "closed";
+        reject(new Error("Telemetry transport failed"));
+      };
       this.socket.onmessage = ({ data }) => {
         for (const listener of this.listeners) listener(data);
       };
@@ -66,6 +76,27 @@ export class DemoTransport implements Transport {
     this.state = "closed";
   }
 
+  send(payload: string) {
+    try {
+      const command = JSON.parse(payload) as { type?: string; url?: string };
+      if (command.type !== "inspect-url" || !command.url) return;
+      const requestedUrl = new URL(command.url).href;
+      const inspectionId = `demo-inspection-${Date.now()}`;
+      const base = {
+        inspectionId,
+        requestedUrl,
+        source: "demo-transport",
+      };
+      this.emitLifecycle(inspectionId, requestedUrl, "started", base);
+      window.setTimeout(() => {
+        this.emitInspectionNetwork(inspectionId, requestedUrl, base);
+        this.emitLifecycle(inspectionId, requestedUrl, "completed", base);
+      }, 120);
+    } catch {
+      // Ignore malformed demo commands; the real bridge validates commands.
+    }
+  }
+
   subscribe(handler: (payload: string) => void) {
     this.listeners.add(handler);
     return () => this.listeners.delete(handler);
@@ -85,13 +116,15 @@ export class DemoTransport implements Transport {
     const sequence = ++this.sequence;
     return {
       id: `evt-${sequence}`,
-      sessionId: "velora-local-01",
+      sessionId: "koko-local-01",
       sequence,
       timestamp: Date.now(),
       duration,
       kind,
       name: eventName(kind, sequence),
-      status: duration > 130 ? "error" : duration > 75 ? "warning" : "ok",
+      status: kind === "network"
+        ? (duration > 75 ? "warning" : "ok")
+        : (duration > 130 ? "error" : duration > 75 ? "warning" : "ok"),
       parentId: sequence > 1 ? `evt-${Math.max(1, sequence - (sequence % 5 || 1))}` : undefined,
       payload: {
         demo: true,
@@ -102,6 +135,50 @@ export class DemoTransport implements Transport {
         realmEpoch: Math.floor(sequence / 80) + 1,
       },
     };
+  }
+
+  private emitLifecycle(inspectionId: string, url: string, state: "started" | "completed", base: Record<string, string>) {
+    const event: TelemetryEvent = {
+      id: `${inspectionId}:${state}`,
+      sessionId: inspectionId,
+      sequence: ++this.sequence,
+      timestamp: Date.now(),
+      duration: 0,
+      kind: "log",
+      name: `inspection-${state}`,
+      status: "ok",
+      payload: { ...base, inspectionId, requestedUrl: url, inspectionState: state },
+    };
+    for (const listener of this.listeners) listener(JSON.stringify(event));
+  }
+
+  private emitInspectionNetwork(inspectionId: string, url: string, base: Record<string, string>) {
+    const stages: Array<[string, number, Record<string, unknown>]> = [
+      ["queue", 1, { measurement: "measured" }],
+      ["cache", 0, { measurement: "not-timed", cacheDecision: "not-observed" }],
+      ["dns", 4, { measurement: "measured", primaryIp: "93.184.216.34" }],
+      ["routing", 0, { measurement: "unavailable" }],
+      ["proxy", 0, { measurement: "not-timed", usedProxy: false }],
+      ["tcp", 18, { measurement: "measured", primaryIp: "93.184.216.34", httpVersion: "h1" }],
+      ["tls", 41, { measurement: "measured", httpVersion: "h1" }],
+      ["request", 2, { measurement: "measured", method: "GET", url }],
+      ["redirect", 0, { measurement: "not-timed", redirectCount: 0 }],
+      ["server", 25, { measurement: "measured", responseStatus: 200 }],
+      ["response", 12, { measurement: "measured", responseStatus: 200, responseBodyBytes: 24800, contentType: "text/html", contentEncoding: "identity", httpVersion: "h1" }],
+      ["received", 0, { measurement: "boundary", responseStatus: 200, responseBodyBytes: 24800 }],
+    ];
+    const events = stages.map(([journeyStage, duration, payload]) => ({
+      id: `${inspectionId}:${journeyStage}`,
+      sessionId: inspectionId,
+      sequence: ++this.sequence,
+      timestamp: Date.now(),
+      duration,
+      kind: "network" as const,
+      name: journeyStage,
+      status: "ok" as const,
+      payload: { ...base, inspectionId, requestedUrl: url, journeyStage, url, ...payload },
+    }));
+    for (const listener of this.listeners) listener(JSON.stringify(events));
   }
 }
 

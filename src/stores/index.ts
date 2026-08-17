@@ -32,6 +32,16 @@ export const useTelemetryStore = create<TelemetryState>((set) => ({
   setStatus: (status) => set({ status }),
 }));
 
+// HTML progress snapshots are deliberately separate from telemetry retention:
+// only the latest snapshot is needed to render the live Export preview.
+export const useExportStore = create<{
+  progress?: TelemetryEvent;
+  setProgress: (progress?: TelemetryEvent) => void;
+}>((set) => ({
+  progress: undefined,
+  setProgress: (progress) => set({ progress }),
+}));
+
 export const useGraphStore = create<{
   nodes: GraphNodeModel[];
   edges: GraphEdgeModel[];

@@ -2,6 +2,7 @@ import type { TelemetryEvent, WorkerSnapshot } from "@/src/core/types";
 
 type ObservatoryEvents = {
   raw: TelemetryEvent[];
+  exportProgress: TelemetryEvent;
   snapshot: WorkerSnapshot;
   status: "connecting" | "live" | "paused" | "offline";
 };

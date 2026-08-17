@@ -1,5 +1,5 @@
 {
-  "name": "velora-observatory",
+  "name": "koko-observatory",
   "version": "0.1.0",
   "private": true,
   "engines": {
@@ -12,7 +12,7 @@
     "test": "npm run build && node --test tests/rendered-html.test.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "db:generate": "drizzle-kit generate",
-    "telemetry:bridge": "node scripts/velora-telemetry-bridge.mjs",
+    "telemetry:bridge": "node scripts/koko-telemetry-bridge.mjs",
     "dev:live": "node scripts/start-live.mjs"
   },
   "dependencies": {

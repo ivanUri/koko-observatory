@@ -7,7 +7,7 @@ const step = (
 ): JourneyNode => ({
   id, type, title, description, duration: 0, timestamp: 0, status: "pending",
   metadata: {
-    summary: summary.map((item) => ({ ...item, value: "Awaiting Velora telemetry" })), reference, raw: undefined, estimated: true, measurement,
+    summary: summary.map((item) => ({ ...item, value: "Awaiting Koko telemetry" })), reference, raw: undefined, estimated: true, measurement,
     explanation: description,
     issues: ["Timeouts, invalid configuration, and stale cached data can interrupt this stage."],
     practices: ["Measure this stage separately and preserve protocol-level diagnostics."],
@@ -24,10 +24,10 @@ export const internetJourneyNodes: JourneyNode[] = [
     { label: "Absolute URL", value: "true" }, { label: "Origin", value: "https://example.com" },
   ], "WHATWG URL Standard", undefined, "not-timed"),
   step("queue", "http", "Request queue", "The request waits for network scheduling and an available connection slot.", 0, [
-    { label: "Queue time", value: "Awaiting Velora telemetry" },
+    { label: "Queue time", value: "Awaiting Koko telemetry" },
   ], "libcurl CURLINFO_QUEUE_TIME_T"),
   step("cache", "response", "Cache decision", "The browser decides whether to serve, revalidate, or fetch the resource from the network.", 0, [
-    { label: "Decision", value: "Awaiting Velora telemetry" },
+    { label: "Decision", value: "Awaiting Koko telemetry" },
   ], "RFC 9111", undefined, "not-timed"),
   step("dns", "dns", "DNS resolution", "Caches, resolver, root, TLD and authoritative DNS resolve the host.", 4, [
     { label: "A", value: "93.184.216.34" }, { label: "AAAA", value: "2606:2800:220:1:248:1893:25c8:1946" },
@@ -37,7 +37,7 @@ export const internetJourneyNodes: JourneyNode[] = [
     { label: "Route hops", value: "Unavailable without traceroute" },
   ], "RFC 4271"),
   step("proxy", "routing", "Proxy / tunnel", "An HTTP proxy or CONNECT tunnel may mediate the connection when configured.", 0, [
-    { label: "Proxy", value: "Awaiting Velora telemetry" },
+    { label: "Proxy", value: "Awaiting Koko telemetry" },
   ], "RFC 9110", undefined, "not-timed"),
   step("tcp", "connection", "TCP connection", "SYN → SYN ACK → ACK establishes a reliable connection.", 18, [
     { label: "RTT", value: "18 ms" }, { label: "Retransmissions", value: "0" }, { label: "Congestion window", value: "10 MSS" },
@@ -50,7 +50,7 @@ export const internetJourneyNodes: JourneyNode[] = [
     { label: "Method", value: "GET" }, { label: "Compression", value: "br, gzip" }, { label: "Request size", value: "842 B" },
   ], "RFC 9110 · RFC 9112", "GET /products?id=5 HTTP/1.1\nHost: example.com\nAccept: text/html\nAccept-Encoding: br, gzip\nCookie: session=••••"),
   step("redirect", "http", "Redirect chain", "HTTP redirects can change the URL and method before the terminal response.", 0, [
-    { label: "Redirects", value: "Awaiting Velora telemetry" },
+    { label: "Redirects", value: "Awaiting Koko telemetry" },
   ], "RFC 9110", undefined, "not-timed"),
   step("server", "server", "Server / TTFB", "Measured time until the first response byte. Internal application and database timings are not exposed by the browser.", 95, [
     { label: "Measurement", value: "time to first byte" }, { label: "Application", value: "Unavailable from browser" }, { label: "Database", value: "Unavailable from browser" },

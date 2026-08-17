@@ -49,7 +49,7 @@ export function SystemJourneyPanel() {
     <section className="system-metrics" aria-label="Live system metrics">
       <SystemMetric label="Processes" value={model.processes.length ? String(model.processes.length) : "Unavailable"} detail="Unique observed process identities" />
       <SystemMetric label="Threads" value={model.threads.length ? String(model.threads.length) : "Unavailable"} detail="Unique observed execution threads" />
-      <SystemMetric label="CPU" value={numberValue(model.latest.cpuPercent, "%")} detail={model.latest.logicalCpuCount == null ? "Logical CPU topology unavailable" : `${model.latest.logicalCpuCount} logical CPUs · cumulative ${integerValue(model.latest.contextSwitches)} switches`} />
+      <SystemMetric label="CPU capacity" value={numberValue(model.latest.cpuPercent, "%")} detail={cpuDetail(model.latest.cpuCoresUsed, model.latest.cpuSampleWindowMs, model.latest.logicalCpuCount, model.latest.contextSwitches)} />
       <SystemMetric label="Resident RAM" value={formatBytes(model.latest.residentMemoryBytes)} detail={model.latest.physicalMemoryBytes == null ? "Host capacity unavailable" : `${formatBytes(model.latest.physicalMemoryBytes)} host physical memory`} />
       <SystemMetric label="Disk I/O" value={formatBytes((model.latest.diskReadBytes ?? 0) + (model.latest.diskWriteBytes ?? 0), model.hasDisk)} detail={`${formatBytes(model.latest.diskReadBytes)} read · ${formatBytes(model.latest.diskWriteBytes)} write`} />
       <SystemMetric label="Presented frames" value={model.frames.length ? String(model.frames.length) : "Unavailable"} detail={model.frames.length ? `Latest boundary ${formatDuration(model.frames.at(-1)?.duration)}` : "No frame/present boundary emitted"} />
@@ -71,7 +71,7 @@ export function SystemJourneyPanel() {
 
       <aside className="system-side">
         <section className="system-card"><header><div><span>HARDWARE TOPOLOGY</span><h2>Observed execution hardware</h2></div></header><div className="hardware-path">{model.hardware.map((item, index) => <div key={item.name}><i>{index + 1}</i><span><strong>{item.name}</strong><small className={item.available ? "" : "unavailable-text"}>{item.value}</small></span>{index < model.hardware.length - 1 && <b>↓</b>}</div>)}</div></section>
-        <section className="system-card"><header><div><span>RESOURCE COUNTERS</span><h2>Latest process sample</h2></div><small>Cumulative unless noted</small></header><div className="resource-summary"><SystemRow label="Resident memory" value={formatBytes(model.latest.residentMemoryBytes)} /><SystemRow label="CPU utilization" value={numberValue(model.latest.cpuPercent, "%")} /><SystemRow label="Context switches" value={integerValue(model.latest.contextSwitches)} /><SystemRow label="Disk read" value={formatBytes(model.latest.diskReadBytes)} /><SystemRow label="Disk write" value={formatBytes(model.latest.diskWriteBytes)} /><SystemRow label="Network received" value={model.networkReceived ? formatBytes(model.networkReceived) : "Unavailable"} /><SystemRow label="Connections" value={model.connections.size ? String(model.connections.size) : "Unavailable"} /></div></section>
+        <section className="system-card"><header><div><span>RESOURCE COUNTERS</span><h2>Latest process sample</h2></div><small>Cumulative unless noted</small></header><div className="resource-summary"><SystemRow label="Resident memory" value={formatBytes(model.latest.residentMemoryBytes)} /><SystemRow label="CPU capacity" value={numberValue(model.latest.cpuPercent, "%")} /><SystemRow label="CPU window" value={model.latest.cpuSampleWindowMs == null ? "Warming up" : `${model.latest.cpuSampleWindowMs.toFixed(0)} ms`} /><SystemRow label="Context switches" value={integerValue(model.latest.contextSwitches)} /><SystemRow label="Disk read" value={formatBytes(model.latest.diskReadBytes)} /><SystemRow label="Disk write" value={formatBytes(model.latest.diskWriteBytes)} /><SystemRow label="Network received" value={model.networkReceived ? formatBytes(model.networkReceived) : "Unavailable"} /><SystemRow label="Connections" value={model.connections.size ? String(model.connections.size) : "Unavailable"} /></div></section>
       </aside>
     </div>
 
@@ -85,7 +85,7 @@ export function SystemJourneyPanel() {
 
 function buildSystemModel(events: TelemetryEvent[]) {
   const systemEvents = events.filter((event) => typeof event.payload.systemStage === "string" || hasAny(event, ["processId", "threadId", "residentMemoryBytes", "cpuPercent", "contextSwitches", "diskReadBytes", "diskWriteBytes"]));
-  const latest = latestNumbers(systemEvents, ["cpuPercent", "logicalCpuCount", "contextSwitches", "residentMemoryBytes", "physicalMemoryBytes", "diskReadBytes", "diskWriteBytes", "gpuPercent", "gpuMemoryBytes", "refreshRateHz"]);
+  const latest = latestNumbers(systemEvents, ["cpuPercent", "cpuCoresUsed", "cpuSampleWindowMs", "logicalCpuCount", "contextSwitches", "residentMemoryBytes", "physicalMemoryBytes", "diskReadBytes", "diskWriteBytes", "gpuPercent", "gpuMemoryBytes", "refreshRateHz"]);
   const stageModels = stages.map((stage) => observeStage(stage, events, systemEvents));
   const frames = events.filter((event) => ["frame", "present"].includes(String(event.payload.browserStage ?? event.name)) || event.payload.presentedFrameId != null);
   const connections = uniqueValues(events, ["connectionId", "primaryIp"]);
@@ -107,7 +107,7 @@ function buildSystemModel(events: TelemetryEvent[]) {
     errorCount: systemEvents.filter((event) => event.status === "error").length,
     sessionCount: new Set(events.map((event) => event.sessionId)).size,
     firstSequence: events.at(0)?.sequence, lastSequence: events.at(-1)?.sequence,
-    networkReceived: sumAliases(events, ["receivedBytes", "responseBodyBytes"]),
+    networkReceived: receivedNetworkBytes(events),
     networkSent: sumAliases(events, ["sentBytes", "requestBytes"]),
     hasDisk: latest.diskReadBytes != null || latest.diskWriteBytes != null,
     memorySamples: systemEvents.filter((event) => typeof event.payload.residentMemoryBytes === "number"),
@@ -170,6 +170,25 @@ function latestNumbers(events: TelemetryEvent[], keys: string[]) { const result:
 function hasAny(event: TelemetryEvent, keys: string[]) { return keys.some((key) => event.payload[key] != null); }
 function uniqueValues(events: TelemetryEvent[], keys: string[]) { const values = new Set<string>(); for (const event of events) for (const key of keys) { const value = event.payload[key]; if (value != null && value !== "") values.add(String(value)); } return values; }
 function sumAliases(events: TelemetryEvent[], keys: string[]) { return events.reduce((sum, event) => { for (const key of keys) { const value = event.payload[key]; if (typeof value === "number") return sum + value; } return sum; }, 0); }
+function receivedNetworkBytes(events: TelemetryEvent[]) {
+  const seen = new Set<string>();
+  let total = 0;
+  for (const event of events) {
+    if (event.kind !== "network" || String(event.payload.journeyStage ?? event.name) !== "received") continue;
+    const key = `${event.sessionId}:${String(event.payload.requestId ?? event.id)}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const value = event.payload.responseBodyBytes ?? event.payload.receivedBytes;
+    if (typeof value === "number" && Number.isFinite(value)) total += value;
+  }
+  return total;
+}
+function cpuDetail(coresUsed: number | undefined, windowMs: number | undefined, logicalCpuCount: number | undefined, contextSwitches: number | undefined) {
+  if (logicalCpuCount == null) return "Logical CPU topology unavailable";
+  const usage = coresUsed == null ? "CPU sample warming up" : `≈ ${coresUsed.toFixed(2)} logical core${coresUsed === 1 ? "" : "s"}`;
+  const window = windowMs == null ? "" : ` · ${windowMs.toFixed(0)} ms window`;
+  return `${usage}${window} · ${logicalCpuCount} logical CPUs · cumulative ${integerValue(contextSwitches)} switches`;
+}
 function payloadText(event: TelemetryEvent | undefined, primary: string, fallback: string) { const value = event?.payload[primary] ?? event?.payload[fallback]; return value == null ? "Unavailable" : String(value); }
 function formatBytes(value?: number, available = value != null) { if (!available || value == null) return "Unavailable"; if (value >= 1_073_741_824) return `${(value / 1_073_741_824).toFixed(1)} GB`; if (value >= 1_048_576) return `${(value / 1_048_576).toFixed(1)} MB`; if (value >= 1024) return `${(value / 1024).toFixed(1)} KB`; return `${value.toFixed(0)} B`; }
 function formatDuration(value?: number) { return value == null ? "Unavailable" : value < 1 ? `${value.toFixed(3)} ms` : `${value.toFixed(2)} ms`; }

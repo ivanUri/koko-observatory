@@ -20,8 +20,16 @@ export class TelemetryPipeline {
     };
     this.unsubscribe = this.transport.subscribe((payload) => {
       const events = this.parse(payload);
-      this.queue.push(...events);
-      observatoryBus.emit("raw", events);
+      // A progress snapshot contains the complete HTML seen so far. Keep it
+      // on a short-lived UI channel instead of putting every copy into the
+      // telemetry worker/history (which would inflate signal counts and
+      // memory as a page hydrates).
+      const progress = events.filter((event) => event.name === "site-export-progress");
+      if (progress.length) observatoryBus.emit("exportProgress", progress[progress.length - 1]);
+      const telemetry = events.filter((event) => event.name !== "site-export-progress");
+      if (!telemetry.length) return;
+      this.queue.push(...telemetry);
+      observatoryBus.emit("raw", telemetry);
       this.scheduleFlush();
     });
     await this.transport.connect();

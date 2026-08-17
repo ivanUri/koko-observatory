@@ -47,11 +47,11 @@ export function InspectorPanel() {
           <header><strong>Telemetry events</strong><small>Latest 500 matching signals</small></header>
           <label><Search size={13}/><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search events…" aria-label="Search inspector events" /></label>
           <select value={kind} onChange={(event) => setKind(event.target.value as typeof kind)} aria-label="Filter inspector subsystem"><option value="all">All subsystems</option>{(["navigation", "network", "dom", "javascript", "scheduler", "render", "memory", "log"] satisfies TelemetryKind[]).map((value) => <option key={value} value={value}>{value}</option>)}</select>
-          <div className="inspector-event-list">{filtered.length ? filtered.map((event) => <button key={event.id} className={selected?.id === event.id ? "active" : ""} onClick={() => select(event.id)}><i className={`event-dot event-dot--${event.status}`}/><span><strong>{event.name}</strong><small>{event.kind} · #{event.sequence}</small></span><time>{shortTime(event.timestamp)}</time></button>) : <div className="inspector-list-empty">No matching events</div>}</div>
+          <div className="inspector-event-list">{filtered.length ? filtered.map((event) => <button key={event.id} className={selected?.id === event.id ? "active" : ""} onClick={() => select(event.id)}><i className={`event-dot event-dot--${event.status}`}/><span><strong>{eventTitle(event)}</strong><small>{event.kind} · {event.name} · #{event.sequence}</small></span><time>{shortTime(event.timestamp)}</time></button>) : <div className="inspector-list-empty">No matching events</div>}</div>
         </aside>
 
         <section className="inspector-detail">{selected ? <>
-          <header className="inspector-detail__header"><div><span>{selected.kind} · {journeyForEvent(selected)}</span><h2>{selected.name}</h2><small>{selected.id}</small></div><div><b className={`status-text--${selected.status}`}>{selected.status}</b><button onClick={copy}><Copy size={13}/>{copied ? "Copied" : "Copy JSON"}</button></div></header>
+          <header className="inspector-detail__header"><div><span>{selected.kind} · {journeyForEvent(selected)}</span><h2>{eventTitle(selected)}</h2><small>{selected.name} · {selected.id}</small></div><div><b className={`status-text--${selected.status}`}>{selected.status}</b><button onClick={copy}><Copy size={13}/>{copied ? "Copied" : "Copy JSON"}</button></div></header>
           <div className="inspector-metrics"><InspectorFact label="Duration" value={formatConsoleDuration(selected.duration)} /><InspectorFact label="Sequence" value={`#${selected.sequence}`} /><InspectorFact label="Timestamp" value={new Date(selected.timestamp).toISOString()} /><InspectorFact label="Session" value={selected.sessionId} /></div>
           <nav className="inspector-tabs" role="tablist">{(["overview", "payload", "raw"] as const).map((tab) => <button key={tab} className={view === tab ? "active" : ""} onClick={() => setView(tab)} role="tab" aria-selected={view === tab}>{tab === "raw" ? "Raw event" : tab[0].toUpperCase() + tab.slice(1)}</button>)}</nav>
           {view === "overview" ? <InspectorOverview event={selected} parent={parent} childEvents={children} onSelect={select} /> : <div className="inspector-editor"><Monaco height="560px" language="json" theme="vs-dark" value={JSON.stringify(view === "payload" ? selected.payload : selected, null, 2)} options={{ readOnly: true, minimap: { enabled: true }, fontSize: 12, lineNumbersMinChars: 3, padding: { top: 14 }, wordWrap: "on", folding: true }} /></div>}
@@ -64,6 +64,8 @@ export function InspectorPanel() {
 function InspectorOverview({ event, parent, childEvents, onSelect }: { event: TelemetryEvent; parent?: TelemetryEvent; childEvents: TelemetryEvent[]; onSelect: (id?: string) => void }) {
   const payload = event.payload;
   const facts = [
+    ["Error", payload.errorType ?? (event.kind === "javascript" && event.status === "error" ? event.name : "Not an error")],
+    ["Message", payload.message ?? "Unavailable"],
     ["Journey stage", payload.journeyStage ?? payload.browserStage ?? payload.systemStage ?? "Not attributed"],
     ["Process", payload.processName ?? payload.process ?? payload.processId ?? "Unavailable"],
     ["Thread", payload.threadName ?? payload.thread ?? payload.threadId ?? "Unavailable"],
@@ -127,7 +129,7 @@ export function ConsolePanel() {
     const url = URL.createObjectURL(new Blob([body], { type: "application/x-ndjson" }));
     const anchor = document.createElement("a");
     anchor.href = url;
-    anchor.download = `velora-console-${new Date().toISOString().replaceAll(":", "-")}.jsonl`;
+    anchor.download = `koko-console-${new Date().toISOString().replaceAll(":", "-")}.jsonl`;
     anchor.click();
     URL.revokeObjectURL(url);
   };
@@ -169,7 +171,7 @@ function ConsoleEntry({ event, open, onToggle }: { event: TelemetryEvent; open: 
   const select = useSelectionStore((state) => state.select);
   return <article className={`console-entry console-entry--${event.status}`}>
     <button className="console-entry__line" onClick={onToggle} aria-expanded={open}>
-      <time>{formatConsoleTime(event.timestamp)}</time><span className="console-level">{event.status === "ok" ? "INFO" : event.status.toUpperCase()}</span><span className="console-kind">{event.kind}</span><strong>{event.name}</strong><span>{formatConsoleDuration(event.duration)}</span><code>#{event.sequence}</code>
+      <time>{formatConsoleTime(event.timestamp)}</time><span className="console-level">{event.status === "ok" ? "INFO" : event.status.toUpperCase()}</span><span className="console-kind">{event.kind}</span><strong title={event.name}>{eventTitle(event)}</strong><span>{formatConsoleDuration(event.duration)}</span><code>#{event.sequence}</code>
     </button>
     {open && <div className="console-entry__detail"><div><span>Session</span><code>{event.sessionId}</code></div><div><span>Event ID</span><code>{event.id}</code></div><div><span>Parent</span><code>{event.parentId ?? "None"}</code></div><pre>{JSON.stringify(event.payload, null, 2)}</pre><Link href="/inspector" onClick={() => select(event.id)}>Open in Event Inspector →</Link></div>}
   </article>;
@@ -177,5 +179,9 @@ function ConsoleEntry({ event, open, onToggle }: { event: TelemetryEvent; open: 
 
 function ConsoleCount({ label, value, tone }: { label: string; value: number; tone: string }) { return <article className={`console-count console-count--${tone}`}><span>{label}</span><strong>{value.toLocaleString()}</strong></article>; }
 function compactPayload(payload: Record<string, unknown>) { try { return JSON.stringify(payload); } catch { return "[unserializable payload]"; } }
+function eventTitle(event: TelemetryEvent) {
+  const message = event.payload.message;
+  return typeof message === "string" && message.length > 0 ? message : event.name;
+}
 function formatConsoleTime(timestamp: number) { return new Date(timestamp).toLocaleTimeString([], { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit", fractionalSecondDigits: 3 }); }
 function formatConsoleDuration(duration: number) { return duration < 1 ? `${duration.toFixed(3)} ms` : `${duration.toFixed(2)} ms`; }

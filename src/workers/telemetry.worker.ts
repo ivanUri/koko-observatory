@@ -55,18 +55,11 @@ function isMeasured(event: TelemetryEvent) {
 
 function buildGraphEdges(source: TelemetryEvent[]) {
   const ids = new Set(source.map((event) => event.id));
-  const causal = source.filter((event) => event.parentId && ids.has(event.parentId)).map((event) => ({ id: `parent:${event.parentId}-${event.id}`, source: event.parentId!, target: event.id, relation: "parent" as const }));
-  const causalPairs = new Set(causal.map((edge) => `${edge.source}->${edge.target}`));
-  const bySession = Map.groupBy(source, (event) => event.sessionId);
-  const sequence = [...bySession].flatMap(([sessionId, sessionEvents]) => {
-    const ordered = [...sessionEvents].sort((a,b) => a.sequence-b.sequence);
-    return ordered.slice(1).flatMap((event, index) => {
-      const previous = ordered[index];
-      if (!previous || causalPairs.has(`${previous.id}->${event.id}`)) return [];
-      return [{ id: `sequence:${sessionId}:${previous.id}-${event.id}`, source: previous.id, target: event.id, relation: "sequence" as const }];
-    });
-  });
-  return [...causal, ...sequence];
+  // Event sequence is chronology, not proof of causality. Only render a
+  // graph edge when Core emitted an explicit parent identity.
+  return source
+    .filter((event) => event.parentId && ids.has(event.parentId))
+    .map((event) => ({ id: `parent:${event.parentId}-${event.id}`, source: event.parentId!, target: event.id, relation: "parent" as const }));
 }
 
 export {};

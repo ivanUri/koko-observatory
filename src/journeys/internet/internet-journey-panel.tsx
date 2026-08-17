@@ -204,7 +204,7 @@ export function InternetJourneyPanel() {
         {[.5, 1, 2].map((value) => <button key={value} className={speed === value ? "active" : ""} onClick={() => setSpeed(value as .5 | 1 | 2)}>×{value}</button>)}
       </div>
     </div>
-    {phase === "idle" ? <section className="journey-empty"><Globe2 size={22} /><strong>Inspect an Internet journey</strong><span>Enter a URL above to launch Velora and reveal each measured network step.</span></section> : <>
+    {phase === "idle" ? <section className="journey-empty"><Globe2 size={22} /><strong>Inspect an Internet journey</strong><span>Enter a URL above to launch Koko and reveal each measured network step.</span></section> : <>
     <section className={`journey-graph journey-graph--${phase}`}>
       <ReactFlow nodes={nodes} edges={edges} nodeTypes={nodeTypes} edgeTypes={edgeTypes} onNodeDragStop={onNodeDragStop} fitView minZoom={.3} maxZoom={1.3}><Background color="#23303b" gap={20} size={1} /><Controls /></ReactFlow>
     </section>

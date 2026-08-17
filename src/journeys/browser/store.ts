@@ -22,7 +22,7 @@ export const useBrowserJourneyStore = create<{
       const item = nodes.find((candidate) => candidate.id === id);
       if (!item || item.status === "complete") return;
       item.status = "complete";
-      item.metadata = { ...item.metadata, ...metadata, measurement: "Boundary derived from Velora telemetry", source };
+      item.metadata = { ...item.metadata, ...metadata, measurement: "Boundary derived from Koko telemetry", source };
     };
     let phase = state.phase;
     let blockedReason = state.blockedReason;
@@ -46,7 +46,7 @@ export const useBrowserJourneyStore = create<{
       const target = nodes.find((item) => item.id === stage);
       if (!target) continue;
       target.duration += event.duration; target.timestamp = event.timestamp; target.status = event.status === "error" ? "active" : "complete";
-      target.metadata = { events: Number(target.metadata.events ?? 0) + 1, lastEvent: event.name, measurement: typeof payload.measurementState === "string" ? payload.measurementState : "Velora telemetry" };
+      target.metadata = { events: Number(target.metadata.events ?? 0) + 1, lastEvent: event.name, measurement: typeof payload.measurementState === "string" ? payload.measurementState : "Koko telemetry" };
       if (typeof payload.scriptUrl === "string") target.metadata.scriptUrl = payload.scriptUrl;
       if (typeof payload.scriptKind === "string") target.metadata.scriptKind = payload.scriptKind;
       for (const key of ["contentType", "contentEncoding", "responseMemoryState"]) if (typeof payload[key] === "string") target.metadata[key] = payload[key] as string;
@@ -57,7 +57,7 @@ export const useBrowserJourneyStore = create<{
           compressedSizeBytes: typeof payload.compressedSizeBytes === "number" ? payload.compressedSizeBytes : 0,
           uncompressedSizeBytes: typeof payload.uncompressedSizeBytes === "number" ? payload.uncompressedSizeBytes : typeof payload.responseBodyBytes === "number" ? payload.responseBodyBytes : 0,
         });
-        markBoundary("cache", "Network cache decision", { cacheDecision: typeof payload.cacheDecision === "string" ? payload.cacheDecision : "network" });
+        markBoundary("cache", "Network cache decision", { cacheDecision: typeof payload.cacheDecision === "string" ? payload.cacheDecision : "not-observed" });
       }
       if (stage === "html-parser") markBoundary("preload", "HTML parser boundary", { measurement: "Scanner activity not timed separately" });
       if (stage === "dom") {
