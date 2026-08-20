@@ -9,9 +9,9 @@ import {
 import "@xyflow/react/dist/style.css";
 import { useGraphStore, useSelectionStore, useTelemetryStore } from "@/src/stores";
 
-export type ExecutionGraphMode = "causal" | "session" | "subsystems" | "neighborhood";
+export type ExecutionGraphMode = "causal" | "session" | "subsystems" | "neighborhood" | "timeline";
 
-type FlowData = { label: string; kind: string; duration: number; status: string; count?: number; aggregate?: boolean; journey?: string; stage?: string; process?: string; thread?: string; session?: string; sequence?: number; facts?: Array<[string,string]>; expandable?: boolean; expanded?: boolean };
+type FlowData = { label: string; kind: string; duration: number; status: string; count?: number; aggregate?: boolean; stage?: string; process?: string; thread?: string; session?: string; sequence?: number; facts?: Array<[string,string]>; expandable?: boolean; expanded?: boolean; timelineStart?: number; laneLabel?: boolean };
 
 const JOURNEY_HUE: Record<string, string> = {
   internet: "#3b8bd6",
@@ -91,11 +91,20 @@ const TelemetryNode = memo(function TelemetryNode({ data, selected }: NodeProps)
   </>;
 });
 
+const OwnerLaneNode = memo(function OwnerLaneNode({ data }: NodeProps) {
+  const model = data as FlowData;
+  return <div className="owner-lane-node"><span>{model.label}</span></div>;
+});
+
+const graphNodeTypes = { telemetry: TelemetryNode, "lane-label": OwnerLaneNode };
+
 function CausalEdge(props: EdgeProps) {
   const [path, labelX, labelY] = getBezierPath(props);
   const relation = String(props.data?.relation ?? "parent");
   return <><BaseEdge path={path} markerEnd={props.markerEnd} className={`graph-edge graph-edge--${relation}`} style={props.style}/><EdgeLabelRenderer><span className={`graph-edge-label graph-edge-label--${relation}`} style={{ transform: `translate(-50%, -50%) translate(${labelX}px,${labelY}px)` }}>{relation}</span></EdgeLabelRenderer></>;
 }
+
+const graphEdgeTypes = { causal: CausalEdge };
 
 export function ExecutionGraph({ mode, nodeIds, selectedId }: { mode: ExecutionGraphMode; nodeIds: Set<string>; selectedId?: string }) {
   const graphNodes = useGraphStore((state) => state.nodes);
@@ -113,6 +122,7 @@ export function ExecutionGraph({ mode, nodeIds, selectedId }: { mode: ExecutionG
     if (mode === "subsystems") return aggregateSubsystems(visible, linked, eventById);
     const scoped = mode === "neighborhood" && selectedId ? neighborhood(visible, linked, selectedId, 2) : { nodes: visible, edges: linked };
     const compact = collapseNetworkRequests(scoped.nodes, scoped.edges, eventById);
+    const timelineMode = mode === "timeline";
     return {
       nodes: compact.nodes.map((node) => {
         const event = eventById.get(node.id);
@@ -122,7 +132,7 @@ export function ExecutionGraph({ mode, nodeIds, selectedId }: { mode: ExecutionG
           data: { ...node, journey: event ? eventJourney(event) : "runtime", stage: String(payload.browserStage ?? payload.systemStage ?? payload.journeyStage ?? "Stage unavailable"), process: String(payload.processName ?? payload.processId ?? "Process unavailable"), thread: String(payload.threadName ?? payload.thread ?? payload.threadId ?? "Thread unavailable"), session: event?.sessionId ?? "Unavailable", sequence: event?.sequence ?? 0, facts: payloadFacts(payload) },
         };
       }),
-      edges: compact.edges.map((edge) => {
+      edges: timelineMode ? [] : compact.edges.map((edge) => {
         const relation = edge.relation === "sequence" ? "next" : edgeRelation(eventById.get(edge.target));
         return { ...edge, type: "causal", label: relation, data: { relation }, markerEnd: { type: MarkerType.ArrowClosed } };
       }),
@@ -138,16 +148,19 @@ export function ExecutionGraph({ mode, nodeIds, selectedId }: { mode: ExecutionG
 
   useEffect(() => {
     if (!instance || !flow.nodes.length) return;
-    const frame = window.requestAnimationFrame(() => void instance.fitView({ padding: .18, duration: 300 }));
+    // A zero-duration fit avoids the resize/animation feedback loop that can
+    // make Chromium report "ResizeObserver loop completed" while ReactFlow is
+    // measuring freshly mounted nodes.
+    const frame = window.requestAnimationFrame(() => void instance.fitView({ padding: .18, duration: 0 }));
     return () => window.cancelAnimationFrame(frame);
   }, [flow.nodes.length, instance]);
 
   return <div className="graph-canvas"><ReactFlow
     nodes={flow.nodes} edges={flow.edges}
-    nodeTypes={{ telemetry: TelemetryNode }} edgeTypes={{ causal: CausalEdge }}
+    nodeTypes={graphNodeTypes} edgeTypes={graphEdgeTypes}
     onInit={setInstance}
     onNodeClick={(_, node) => { if (!String(node.id).startsWith("subsystem:")) select(node.id); }}
-    minZoom={.04} maxZoom={3} fitView fitViewOptions={{ padding: .18 }}
+    minZoom={.04} maxZoom={3}
     nodesDraggable={false} onlyRenderVisibleElements
   >
     <Background color="#0e1820" gap={20} size={1} style={{ background: "#060c13" }} />
@@ -178,7 +191,7 @@ function ownerTimelineKey(node: Node, eventById: SwimlaneEventById): string {
   return `${process} · ${thread}`;
 }
 
-type GraphSourceNode = { id: string; label: string; kind: string; duration: number; status: string; count?: number; aggregate?: boolean; stage?: string };
+type GraphSourceNode = { id: string; label: string; kind: string; duration: number; status: string; count?: number; aggregate?: boolean; stage?: string; timelineStart?: number };
 type GraphSourceEdge = { id: string; source: string; target: string; relation?: string };
 
 function collapseNetworkRequests(nodes: GraphSourceNode[], edges: GraphSourceEdge[], eventById: SwimlaneEventById) {
@@ -206,7 +219,7 @@ function collapseNetworkRequests(nodes: GraphSourceNode[], edges: GraphSourceEdg
     const url = typeof payload.url === "string" ? requestLabel(payload.url) : "HTTP request";
     const method = typeof payload.method === "string" ? payload.method : "HTTP";
     const status = ordered.some((node) => node.status === "error") ? "error" : ordered.some((node) => node.status === "warning") ? "warning" : "ok";
-    collapsed.set(terminal.id, { ...terminal, label: `${method} ${url}`, duration: measuredDuration, status, count: ordered.length, aggregate: true, stage: `${ordered.length} network stages` } as GraphSourceNode);
+    collapsed.set(terminal.id, { ...terminal, label: `${method} ${url}`, duration: measuredDuration, timelineStart: eventById.get(ordered[0].id)?.timestamp ?? event.timestamp, status, count: ordered.length, aggregate: true, stage: `${ordered.length} network stages` } as GraphSourceNode);
     for (const node of ordered) representative.set(node.id, terminal.id);
   }
 
@@ -243,7 +256,10 @@ function ownerTimelineLayout(nodes: Node[], causalEdges: Edge[], eventById: Swim
   }
 
   // 2. Resolve timestamps
-  const getTs = (node: Node) => eventById.get(node.id)?.timestamp ?? 0;
+  const getTs = (node: Node) => {
+    const timelineStart = (node.data as FlowData | undefined)?.timelineStart;
+    return typeof timelineStart === "number" ? timelineStart : eventById.get(node.id)?.timestamp ?? 0;
+  };
   const timestamps = nodes.map(getTs).filter((t) => t > 0);
   const tMin = timestamps.length ? Math.min(...timestamps) : 0;
   const tMax = timestamps.length ? Math.max(...timestamps) : 1;
@@ -286,7 +302,15 @@ function ownerTimelineLayout(nodes: Node[], causalEdges: Edge[], eventById: Swim
     return { ...node, position: { x, y } };
   });
 
-  return { nodes: positionedNodes, edges: causalEdges };
+  const laneLabels: Node[] = laneOrder.map((label, index) => ({
+    id: `owner-lane:${index}:${label}`,
+    type: "lane-label",
+    position: { x: 0, y: index * LANE_H + 1 },
+    selectable: false,
+    draggable: false,
+    data: { label, laneLabel: true, kind: "lane", duration: 0, status: "ok" },
+  }));
+  return { nodes: [...laneLabels, ...positionedNodes], edges: causalEdges };
 }
 
 

@@ -1,4 +1,4 @@
-import { Activity, Braces, Cpu, Database, FileDown, GitBranch, Globe2, MonitorCog, Network, Play, TerminalSquare, TimerReset } from "lucide-react";
+import { Activity, Braces, Cpu, Database, FileDown, GitBranch, Globe2, MonitorCog, Network, Play, Sparkles, TerminalSquare, TimerReset } from "lucide-react";
 import type { ObservatoryPlugin } from "@/src/plugins/types";
 import { GraphPanel, NetworkPanel, OverviewPanel, TimelinePanel } from "@/src/components/panels";
 import { ExecutionPanel } from "@/src/components/execution-panel";
@@ -8,6 +8,7 @@ import { BrowserJourneyPanel } from "@/src/journeys/browser/browser-journey-pane
 import { SystemJourneyPanel } from "@/src/journeys/system/system-journey-panel";
 import { ApplicationPanel } from "@/src/components/application-panel";
 import { ExportPanel } from "@/src/components/export-panel";
+import { AIInsightsPanel } from "@/src/components/ai-insights-panel";
 
 export const plugins: ObservatoryPlugin[] = [
   { id: "overview", route: "/", label: "Overview", description: "Runtime health and metrics", icon: Activity, component: OverviewPanel },
@@ -22,6 +23,7 @@ export const plugins: ObservatoryPlugin[] = [
   { id: "console", route: "/console", label: "Console", description: "Runtime diagnostics", icon: TerminalSquare, component: ConsolePanel },
   { id: "application", route: "/application", label: "Application", description: "Cookies and origin storage", icon: Database, component: ApplicationPanel, sidebar: false },
   { id: "export", route: "/export", label: "Export", description: "Download telemetry as JSON, Markdown, or HTML", icon: FileDown, component: ExportPanel, sidebar: false },
+  { id: "ai-insights", route: "/ai-insights", label: "AI insights", description: "Evidence-backed runtime recommendations", icon: Sparkles, component: AIInsightsPanel, sidebar: false },
 ];
 
 export function getPlugin(id: string) {

@@ -1,4 +1,5 @@
 import { watch } from "node:fs";
+import { createHash } from "node:crypto";
 import { mkdir, open, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -23,9 +24,17 @@ const executions = new Map();
 let lifecycleSequence = Date.now();
 
 const DEFAULT_RUN_OPTIONS = Object.freeze({
-  waitUntil: "domstable",
+  // The UI observes lifecycle milestones instead of making the user choose a
+  // blocking wait policy. Core returns at DCL, then keeps the page alive for a
+  // bounded window so hydration/lazy resources can continue in the background.
+  waitUntil: "domcontentloaded",
   waitMs: 30_000,
+  observeMs: 10_000,
   terminateMs: 90_000,
+  expandLazy: false,
+  blockAds: false,
+  maxScrolls: 80,
+  scrollSettleMs: 250,
   waitSelector: "",
   waitScript: "",
   userAgent: "",
@@ -163,11 +172,20 @@ function normalizeRunOptions(raw) {
     const number = Number(value);
     return Number.isFinite(number) && number >= 0 ? Math.min(Math.floor(number), 24 * 60 * 60 * 1000) : fallback;
   };
+  const boundedInteger = (value, fallback, maximum) => {
+    const number = Number(value);
+    return Number.isFinite(number) && number >= 0 ? Math.min(Math.floor(number), maximum) : fallback;
+  };
   const text = (value) => typeof value === "string" ? value.trim() : "";
   return {
     waitUntil,
     waitMs: positiveNumber(source.waitMs, DEFAULT_RUN_OPTIONS.waitMs),
+    observeMs: positiveNumber(source.observeMs, DEFAULT_RUN_OPTIONS.observeMs),
     terminateMs: positiveNumber(source.terminateMs, DEFAULT_RUN_OPTIONS.terminateMs),
+    expandLazy: source.expandLazy === true || source.expand_lazy === true,
+    blockAds: source.blockAds === true || source.block_ads === true,
+    maxScrolls: boundedInteger(source.maxScrolls ?? source.max_scrolls, DEFAULT_RUN_OPTIONS.maxScrolls, 10_000),
+    scrollSettleMs: positiveNumber(source.scrollSettleMs ?? source.scroll_settle_ms, DEFAULT_RUN_OPTIONS.scrollSettleMs),
     waitSelector: text(source.waitSelector),
     waitScript: text(source.waitScript),
     userAgent: text(source.userAgent),
@@ -203,6 +221,7 @@ function runCoreInspection(url, replay, options = activeInspection?.options ?? D
   const args = [
     "fetch", "--dump", "markdown", "--wait-until", options.waitUntil,
     "--wait-ms", String(options.waitMs),
+    "--observe-ms", String(options.observeMs),
     "--internet-journey-file", activeInspection.telemetryFile,
     // Observatory is an explicit local inspection surface, so it opts into
     // bounded text/JSON bodies without requiring users to manage an env var.
@@ -213,6 +232,10 @@ function runCoreInspection(url, replay, options = activeInspection?.options ?? D
     "--execution-checkpoint-dir", activeInspection.checkpointDirectory,
   ];
   if (options.terminateMs > 0) args.push("--terminate-ms", String(options.terminateMs));
+  if (options.expandLazy) {
+    args.push("--expand-lazy", "--max-scrolls", String(options.maxScrolls), "--scroll-settle-ms", String(options.scrollSettleMs));
+  }
+  if (options.blockAds) args.push("--block-ads");
   if (options.includeFrames) args.push("--with-frames");
   const optionFilesPromise = prepareRunOptions(options);
   let htmlFile = "";
@@ -255,21 +278,29 @@ function emitSiteExport(markdown, finalHtml = "") {
   if (!activeInspection) return;
   const documentEvent = documentResponseEvent();
   const payload = documentEvent?.payload ?? {};
+  const contentType = typeof payload.contentType === "string" ? payload.contentType : "text/html";
+  const responseBody = typeof payload.responseBody === "string" ? payload.responseBody : "";
+  const htmlResponse = isHtmlResponse(contentType, responseBody);
   // SPA response bodies often contain only the pre-hydration loading shell.
-  // Prefer the final DOM serialized by Core after the configured wait.
-  const html = typeof finalHtml === "string" && finalHtml.length > 0
-    ? finalHtml
-    : typeof payload.responseBody === "string" ? payload.responseBody : "";
-  const markdownText = typeof markdown === "string" ? markdown : "";
+  // Prefer the final DOM serialized by Core after the configured wait, but
+  // never use that browser-generated wrapper for JSON or plain-text APIs.
+  const html = htmlResponse
+    ? typeof finalHtml === "string" && finalHtml.length > 0 ? finalHtml : responseBody
+    : "";
+  const body = htmlResponse ? "" : responseBody;
+  const markdownText = htmlResponse && typeof markdown === "string" ? markdown : "";
   const siteExport = {
     url: typeof payload.url === "string" ? payload.url : activeInspection.requestedUrl,
     status: typeof payload.responseStatus === "number" ? payload.responseStatus : null,
-    contentType: typeof payload.contentType === "string" ? payload.contentType : "text/html",
+    contentType,
     html,
+    body,
     markdown: markdownText,
     htmlBytes: Buffer.byteLength(html, "utf8"),
+    bodyBytes: Buffer.byteLength(body, "utf8"),
     markdownBytes: Buffer.byteLength(markdownText, "utf8"),
     htmlCaptured: Boolean(html),
+    bodyCaptured: Boolean(body),
     markdownCaptured: Boolean(markdownText),
     bodyTruncated: payload.bodyTruncated === true,
     sourceEventId: documentEvent?.id ?? null,
@@ -290,6 +321,13 @@ function documentResponseEvent() {
   });
 }
 
+function isHtmlResponse(contentType, body = "") {
+  const normalized = String(contentType).toLowerCase();
+  if (normalized.includes("application/json") || normalized.includes("+json")) return false;
+  if (normalized.includes("text/html") || normalized.includes("application/xhtml+xml")) return true;
+  return /^\s*(?:<!doctype\s+html|<html\b)/i.test(body);
+}
+
 function siteExportEvent(name, siteExport) {
   return {
     id: `${activeInspection.id}:${name}:${Date.now()}`,
@@ -299,7 +337,7 @@ function siteExportEvent(name, siteExport) {
     duration: 0,
     kind: "log",
     name,
-    status: siteExport.htmlCaptured || siteExport.markdownCaptured ? "ok" : "warning",
+    status: siteExport.htmlCaptured || siteExport.bodyCaptured || siteExport.markdownCaptured ? "ok" : "warning",
     payload: {
       executionId: activeInspection.id,
       inspectionId: activeInspection.id,
@@ -314,36 +352,52 @@ async function drainSiteExportProgress() {
   if (!activeInspection) return;
   const htmlFile = resolve(activeInspection.optionsDirectory, "site.html");
   let info;
+  let html = "";
   try {
     info = await stat(htmlFile);
   } catch (error) {
     if (error?.code !== "ENOENT") console.warn("Unable to inspect partial site export:", error);
-    return;
+    info = undefined;
   }
-  if (!info.size) return;
-  const key = `${info.size}:${info.mtimeMs}`;
-  if (key === activeInspection.lastExportProgressKey) return;
-  let html;
-  try {
-    html = await readFile(htmlFile, "utf8");
-  } catch {
-    return;
+  if (info?.size) {
+    try {
+      html = await readFile(htmlFile, "utf8");
+    } catch {
+      html = "";
+    }
   }
-  if (!html) return;
-  activeInspection.lastExportProgressKey = key;
   const documentEvent = documentResponseEvent();
   const payload = documentEvent?.payload ?? {};
+  const contentType = typeof payload.contentType === "string" ? payload.contentType : "text/html";
+  const responseBody = typeof payload.responseBody === "string" ? payload.responseBody : "";
+  const htmlResponse = isHtmlResponse(contentType, responseBody);
+  // `--dump-html-file` is written after the Core command finishes. The
+  // captured document response, however, is available as soon as navigation
+  // receives its first body, so use it as the live seed and replace it with
+  // the serialized DOM file when Core writes that later snapshot.
+  if (!html && htmlResponse) html = responseBody;
+  const body = htmlResponse ? "" : responseBody;
+  if (!html && !body) return;
+  // Core refreshes the sidecar on a timer. Only publish when the actual
+  // document bytes changed; mtime alone would make the UI repaint every tick.
+  const contentHash = createHash("sha1").update(html).update(body).digest("hex");
+  const key = `${documentEvent?.id ?? "none"}:${contentHash}`;
+  if (key === activeInspection.lastExportProgressKey) return;
+  activeInspection.lastExportProgressKey = key;
   const siteExport = {
     url: typeof payload.url === "string" ? payload.url : activeInspection.requestedUrl,
     status: typeof payload.responseStatus === "number" ? payload.responseStatus : null,
-    contentType: typeof payload.contentType === "string" ? payload.contentType : "text/html",
-    html,
+    contentType,
+    html: htmlResponse ? html : "",
+    body,
     markdown: "",
-    htmlBytes: Buffer.byteLength(html, "utf8"),
+    htmlBytes: htmlResponse ? Buffer.byteLength(html, "utf8") : 0,
+    bodyBytes: htmlResponse ? 0 : Buffer.byteLength(body, "utf8"),
     markdownBytes: 0,
-    htmlCaptured: true,
+    htmlCaptured: htmlResponse,
+    bodyCaptured: !htmlResponse && Boolean(responseBody),
     markdownCaptured: false,
-    bodyTruncated: false,
+    bodyTruncated: payload.bodyTruncated === true,
     sourceEventId: documentEvent?.id ?? null,
     complete: false,
   };
@@ -534,7 +588,12 @@ function emitInspectionState(state, error, message) {
       runOptions: activeInspection.options ? {
         waitUntil: activeInspection.options.waitUntil,
         waitMs: activeInspection.options.waitMs,
+        observeMs: activeInspection.options.observeMs,
         terminateMs: activeInspection.options.terminateMs,
+        expandLazy: activeInspection.options.expandLazy === true,
+        blockAds: activeInspection.options.blockAds === true,
+        maxScrolls: activeInspection.options.maxScrolls,
+        scrollSettleMs: activeInspection.options.scrollSettleMs,
         waitSelectorConfigured: Boolean(activeInspection.options.waitSelector),
         waitScriptConfigured: Boolean(activeInspection.options.waitScript),
         userAgentConfigured: Boolean(activeInspection.options.userAgent),

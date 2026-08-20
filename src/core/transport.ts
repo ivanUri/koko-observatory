@@ -90,8 +90,16 @@ export class DemoTransport implements Transport {
       this.emitLifecycle(inspectionId, requestedUrl, "started", base);
       window.setTimeout(() => {
         this.emitInspectionNetwork(inspectionId, requestedUrl, base);
-        this.emitLifecycle(inspectionId, requestedUrl, "completed", base);
-      }, 120);
+        this.emitLifecycleStage(inspectionId, requestedUrl, "domcontentloaded", base);
+        window.setTimeout(() => {
+          this.emitLifecycleStage(inspectionId, requestedUrl, "load", base);
+          window.setTimeout(() => {
+            this.emitLifecycleStage(inspectionId, requestedUrl, "domstable", base);
+            this.emitLifecycleStage(inspectionId, requestedUrl, "networkidle", base);
+            this.emitLifecycle(inspectionId, requestedUrl, "completed", base);
+          }, 70);
+        }, 45);
+      }, 80);
     } catch {
       // Ignore malformed demo commands; the real bridge validates commands.
     }
@@ -148,6 +156,21 @@ export class DemoTransport implements Transport {
       name: `inspection-${state}`,
       status: "ok",
       payload: { ...base, inspectionId, requestedUrl: url, inspectionState: state },
+    };
+    for (const listener of this.listeners) listener(JSON.stringify(event));
+  }
+
+  private emitLifecycleStage(inspectionId: string, url: string, stage: "domcontentloaded" | "load" | "domstable" | "networkidle", base: Record<string, string>) {
+    const event: TelemetryEvent = {
+      id: `${inspectionId}:lifecycle:${stage}`,
+      sessionId: inspectionId,
+      sequence: ++this.sequence,
+      timestamp: Date.now(),
+      duration: 0,
+      kind: "navigation",
+      name: stage,
+      status: "ok",
+      payload: { ...base, inspectionId, requestedUrl: url, lifecycleStage: stage, executionStatus: "recording", source: "demo-transport" },
     };
     for (const listener of this.listeners) listener(JSON.stringify(event));
   }

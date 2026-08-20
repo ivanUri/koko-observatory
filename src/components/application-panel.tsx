@@ -57,7 +57,7 @@ export function ApplicationPanel() {
 
     <section className="panel-card application-card">
       <header className="card-header"><div><h2><Icon size={15}/>{selected.label}</h2><p>{selected.description} · {origin}</p></div><span className="application-source">{snapshotSummary ? snapshotLabel(snapshotSummary) : sessionId ? "snapshot signal missing" : "awaiting snapshot"}</span></header>
-      <div className="application-toolbar"><div className="application-tabs" role="tablist">{storageTabs.map((tab) => <button key={tab.id} className={active === tab.id ? "active" : ""} onClick={() => { setActive(tab.id); setSelectedIdentity(undefined); }} role="tab" aria-selected={active === tab.id}>{tab.label}</button>)}</div><label className="application-search"><Search size={13}/><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={`Search ${selected.label.toLowerCase()}…`} aria-label={`Search ${selected.label}`} /></label></div>
+      <div className="application-toolbar"><label className="application-search"><Search size={13}/><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={`Search ${selected.label.toLowerCase()}…`} aria-label={`Search ${selected.label}`} /></label></div>
       {active === "cache-storage" ? <UnsupportedCacheStorage /> : visibleRows.length ? <div className="application-split"><StorageTable rows={visibleRows} selectedIdentity={selectedRow?.identity} onSelect={setSelectedIdentity}/><StorageDetails row={selectedRow}/></div> : <EmptyStorage kind={selected.label} icon={Icon} hasSnapshot={Boolean(sessionId)} />}
     </section>
 

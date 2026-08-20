@@ -24,7 +24,12 @@ type WaitUntil = "load" | "domcontentloaded" | "networkidle" | "domstable" | "do
 interface InspectOptions {
   waitUntil: WaitUntil;
   waitMs: number;
+  observeMs: number;
   terminateMs: number;
+  expandLazy: boolean;
+  blockAds: boolean;
+  maxScrolls: number;
+  scrollSettleMs: number;
   waitSelector: string;
   waitScript: string;
   userAgent: string;
@@ -35,9 +40,14 @@ interface InspectOptions {
 }
 
 const defaultInspectOptions: InspectOptions = {
-  waitUntil: "domstable",
+  waitUntil: "domcontentloaded",
   waitMs: 30_000,
+  observeMs: 10_000,
   terminateMs: 90_000,
+  expandLazy: false,
+  blockAds: true,
+  maxScrolls: 80,
+  scrollSettleMs: 250,
   waitSelector: "",
   waitScript: "",
   userAgent: "",
@@ -154,7 +164,7 @@ function ObservatoryRuntime({ initialPlugin }: { initialPlugin: string }) {
           {!collapsed && <span className="nav-label">Runtime</span>}
           <Link href="/application" className={activePlugin === "application" ? "nav-item nav-item--active" : "nav-item"} title="Application"><Database size={16} /><span>Application</span></Link>
           <Link href="/export" className={activePlugin === "export" ? "nav-item nav-item--active" : "nav-item"} title="Export"><FileDown size={16} /><span>Export</span></Link>
-          <button className="nav-item"><Sparkles size={16} /><span>AI insights</span><em>Beta</em></button>
+          <Link href="/ai-insights" className={activePlugin === "ai-insights" ? "nav-item nav-item--active" : "nav-item"} title="AI insights"><Sparkles size={16} /><span>AI insights</span><em>Beta</em></Link>
         </nav>
         <div className="sidebar-footer">
           <button className="nav-item"><Settings size={16} /><span>Settings</span></button>
@@ -187,6 +197,7 @@ function GlobalInspector() {
       useUIStore.getState().setInspecting(false);
       return;
     }
+    useUIStore.getState().beginInspection();
     useUIStore.getState().setInspecting(true);
     window.dispatchEvent(new CustomEvent("koko:inspect-url", { detail: { url, options } }));
   };
@@ -201,9 +212,13 @@ function GlobalInspector() {
     {advancedOpen && <section className="global-inspector__advanced" aria-label="Advanced inspection options">
       <header><div><strong>Advanced run options</strong><span>These values apply to the next Inspect URL run.</span></div><button type="button" className="global-inspector__reset" onClick={() => setOptions(defaultInspectOptions)}>Reset</button></header>
       <div className="global-inspector__fields">
-        <label><span>Wait until</span><select value={options.waitUntil} onChange={(event) => update("waitUntil", event.target.value as WaitUntil)}><option value="load">load</option><option value="domcontentloaded">domcontentloaded</option><option value="networkidle">networkidle</option><option value="domstable">domstable</option><option value="done">done</option></select></label>
         <label><span>Wait timeout (ms)</span><input type="number" min="0" step="1000" value={options.waitMs} onChange={(event) => update("waitMs", Math.max(0, Number(event.target.value) || 0))} /></label>
+        <label><span>Background observation (ms)</span><input type="number" min="0" step="1000" value={options.observeMs} onChange={(event) => update("observeMs", Math.max(0, Number(event.target.value) || 0))} /></label>
         <label><span>Terminate deadline (ms) <small>0 = disabled</small></span><input type="number" min="0" step="1000" value={options.terminateMs} onChange={(event) => update("terminateMs", Math.max(0, Number(event.target.value) || 0))} /></label>
+        <label className="global-inspector__checkbox"><span>Expand lazy content <small>bounded scrolling</small></span><input type="checkbox" checked={options.expandLazy} onChange={(event) => update("expandLazy", event.target.checked)} /></label>
+        <label className="global-inspector__checkbox"><span>Skip ads and analytics</span><input type="checkbox" checked={options.blockAds} onChange={(event) => update("blockAds", event.target.checked)} /></label>
+        <label><span>Maximum lazy scrolls</span><input type="number" min="0" max="10000" step="1" value={options.maxScrolls} onChange={(event) => update("maxScrolls", Math.max(0, Math.min(10000, Number(event.target.value) || 0)))} /></label>
+        <label><span>Scroll settle (ms)</span><input type="number" min="0" step="50" value={options.scrollSettleMs} onChange={(event) => update("scrollSettleMs", Math.max(0, Number(event.target.value) || 0))} /></label>
         <label><span>User-Agent override</span><input value={options.userAgent} onChange={(event) => update("userAgent", event.target.value)} placeholder="Optional Koko-compatible UA" /></label>
         <label><span>Wait for selector</span><input value={options.waitSelector} onChange={(event) => update("waitSelector", event.target.value)} placeholder=".app-ready" /></label>
         <label><span>Cookie JSON path</span><input value={options.cookiePath} onChange={(event) => update("cookiePath", event.target.value)} placeholder="/path/to/cookies.json" /></label>
@@ -212,7 +227,7 @@ function GlobalInspector() {
         <label className="global-inspector__field--wide"><span>Wait script (optional expression)</span><input value={options.waitScript} onChange={(event) => update("waitScript", event.target.value)} placeholder="window.__APP_READY__ === true" /></label>
         <label className="global-inspector__field--wide"><span>Fixed request headers <small>Name: value, one per line</small></span><textarea value={options.extraHeaders} onChange={(event) => update("extraHeaders", event.target.value)} placeholder={"Authorization: Bearer …\nX-Demo-Run: true"} rows={3} /></label>
       </div>
-      <p className="global-inspector__hint">Custom headers are applied to navigation and subresources. Cookie files must be readable by the telemetry bridge process.</p>
+      <p className="global-inspector__hint">Koko reports lifecycle milestones as they happen, shows an early preview, and keeps servicing the page for the background observation window. Enable bounded lazy expansion for infinite-scroll pages; custom headers apply to navigation and subresources.</p>
     </section>}
   </form>;
 }

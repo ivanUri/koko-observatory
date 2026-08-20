@@ -87,22 +87,26 @@ export const useUIStore = create<{
   commandOpen: boolean;
   inspectorUrl: string;
   inspecting: boolean;
+  inspectionStartedAt?: number;
   setActivePlugin: (id: string) => void;
   toggleSidebar: () => void;
   setCommandOpen: (open: boolean) => void;
   setInspectorUrl: (url: string) => void;
   setInspecting: (inspecting: boolean) => void;
+  beginInspection: () => void;
 }>((set) => ({
   activePlugin: "overview",
   sidebarCollapsed: false,
   commandOpen: false,
   inspectorUrl: "https://example.com",
   inspecting: false,
+  inspectionStartedAt: undefined,
   setActivePlugin: (activePlugin) => set({ activePlugin }),
   toggleSidebar: () => set((state) => ({ sidebarCollapsed: !state.sidebarCollapsed })),
   setCommandOpen: (commandOpen) => set({ commandOpen }),
   setInspectorUrl: (inspectorUrl) => set({ inspectorUrl }),
   setInspecting: (inspecting) => set({ inspecting }),
+  beginInspection: () => set({ inspectionStartedAt: Date.now() }),
 }));
 
 export const useSettingsStore = create<{

@@ -83,10 +83,49 @@ export function OverviewPanel() {
   }
   const topDomains = [...domainCounts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 6);
 
-  // Inspection state steps
-  const INSPECTION_STEPS = ["queued", "started", "receiving", "completed"] as const;
-  const inspState = String(lifecycle?.payload.inspectionState ?? "");
-  const stepIndex = INSPECTION_STEPS.indexOf(inspState as typeof INSPECTION_STEPS[number]);
+  // Browser lifecycle is the useful progress signal for the home page. The
+  // bridge's transport states (queued/started/receiving) remain as early
+  // phases, but once Core emits a milestone we show the actual page state.
+  const hasInspectionState = (state: string) => scoped.some((event) => event.payload.inspectionState === state);
+  const hasLifecycle = (stage: string) => scoped.some((event) => event.payload.lifecycleStage === stage);
+  const hasResponse = scoped.some((event) => event.kind === "network" && event.payload.journeyStage === "response");
+  // A warning/error signal is not the same as a failed inspection. Keep the
+  // pipeline status on its ordered lifecycle steps until the run emits the
+  // terminal failed state.
+  const failed = hasInspectionState("failed");
+  const completed = hasInspectionState("completed");
+  const browserSteps = [
+    "queued",
+    "started",
+    "receiving",
+    "domcontentloaded",
+    "load",
+    "domstable",
+    "networkidle",
+    "background",
+    "completed",
+  ] as const;
+  const reached = new Set<string>();
+  if (hasTelemetry) reached.add("queued");
+  if (hasInspectionState("started")) reached.add("started");
+  if (hasResponse) reached.add("receiving");
+  if (hasLifecycle("domcontentloaded")) reached.add("domcontentloaded");
+  if (hasLifecycle("load")) reached.add("load");
+  if (hasLifecycle("domstable")) reached.add("domstable");
+  if (hasLifecycle("networkidle")) reached.add("networkidle");
+  // Background observation begins after the browser lifecycle milestones. Do
+  // not jump to it merely because the first DOM snapshot arrived: the active
+  // label should move only when the next pipeline step is evidenced.
+  if (hasLifecycle("networkidle") && !completed && !failed) reached.add("background");
+  if (completed) reached.add("completed");
+  const activeStepIndex = browserSteps.reduce((index, step, candidate) => reached.has(step) ? candidate : index, 0);
+  const browserState = failed
+    ? "failed"
+    : completed
+      ? "completed"
+      : hasTelemetry
+        ? browserSteps[activeStepIndex]
+        : "waiting for inspection";
 
   return (
     <PanelFrame
@@ -98,12 +137,12 @@ export function OverviewPanel() {
       <section className="overview-context">
         <div>
           <LivePill />
-          <strong>{String(lifecycle?.payload.inspectionState ?? (hasTelemetry ? "receiving telemetry" : "waiting for inspection"))}</strong>
+          <strong>{browserState}</strong>
           <span>{String(lifecycle?.payload.requestedUrl ?? "Run Inspect URL to start an observed journey")}</span>
-          {inspState && (
+          {hasTelemetry && (
             <div className="inspection-steps">
-              {INSPECTION_STEPS.map((step, i) => (
-                <span key={step} className={`inspection-step${i <= stepIndex ? " inspection-step--done" : ""}${i === stepIndex ? " inspection-step--active" : ""}`}>
+              {browserSteps.map((step, i) => (
+                <span key={step} className={`inspection-step${i < activeStepIndex || reached.has(step) ? " inspection-step--done" : ""}${i === activeStepIndex ? " inspection-step--active" : ""}`}>
                   {step}
                 </span>
               ))}
@@ -115,7 +154,7 @@ export function OverviewPanel() {
 
       {/* Key metrics */}
       <div className="metric-grid">
-        <Metric label="Inspection" value={lifecycle ? String(lifecycle.payload.inspectionState) : "—"} delta={statusLabel(status)} icon={Activity} />
+        <Metric label="Page lifecycle" value={hasTelemetry ? browserState : "—"} delta={statusLabel(status)} icon={Activity} />
         <Metric label="Signals received" value={totalSignals > 0 ? formatNumber(totalSignals) : "—"} delta={`${formatNumber(scoped.length)} in scope · ${measured.length} timed · ${(rate.at(-1)?.[1] ?? 0).toFixed(1)}/s`} icon={Activity} />
         <Metric label="Error rate" value={hasTelemetry ? `${(errors / statusTotal * 100).toFixed(2)}%` : "—"} delta={`${errors} errors · ${warnings} warnings`} icon={CircleDot} />
         <Metric label="Measured P95" value={formatDuration(p95)} delta="across all measured stages" icon={Clock3} />
@@ -423,7 +462,7 @@ export function GraphPanel() {
           )}
           {viewMode === "flow" && (
             visibleNodes.length
-              ? <ExecutionGraph mode="causal" nodeIds={visibleIds} selectedId={selectedId} />
+              ? <ExecutionGraph mode="timeline" nodeIds={visibleIds} selectedId={selectedId} />
               : <GraphEmptyNew label="Timeline by owner" description="Chronological ownership view. It does not infer causal links. Run the inspector to capture telemetry." />
           )}
         </div>
