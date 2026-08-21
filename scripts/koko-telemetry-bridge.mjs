@@ -32,7 +32,6 @@ const DEFAULT_RUN_OPTIONS = Object.freeze({
   observeMs: 10_000,
   terminateMs: 90_000,
   expandLazy: false,
-  blockAds: false,
   maxScrolls: 80,
   scrollSettleMs: 250,
   waitSelector: "",
@@ -183,7 +182,6 @@ function normalizeRunOptions(raw) {
     observeMs: positiveNumber(source.observeMs, DEFAULT_RUN_OPTIONS.observeMs),
     terminateMs: positiveNumber(source.terminateMs, DEFAULT_RUN_OPTIONS.terminateMs),
     expandLazy: source.expandLazy === true || source.expand_lazy === true,
-    blockAds: source.blockAds === true || source.block_ads === true,
     maxScrolls: boundedInteger(source.maxScrolls ?? source.max_scrolls, DEFAULT_RUN_OPTIONS.maxScrolls, 10_000),
     scrollSettleMs: positiveNumber(source.scrollSettleMs ?? source.scroll_settle_ms, DEFAULT_RUN_OPTIONS.scrollSettleMs),
     waitSelector: text(source.waitSelector),
@@ -235,7 +233,6 @@ function runCoreInspection(url, replay, options = activeInspection?.options ?? D
   if (options.expandLazy) {
     args.push("--expand-lazy", "--max-scrolls", String(options.maxScrolls), "--scroll-settle-ms", String(options.scrollSettleMs));
   }
-  if (options.blockAds) args.push("--block-ads");
   if (options.includeFrames) args.push("--with-frames");
   const optionFilesPromise = prepareRunOptions(options);
   let htmlFile = "";
@@ -591,7 +588,6 @@ function emitInspectionState(state, error, message) {
         observeMs: activeInspection.options.observeMs,
         terminateMs: activeInspection.options.terminateMs,
         expandLazy: activeInspection.options.expandLazy === true,
-        blockAds: activeInspection.options.blockAds === true,
         maxScrolls: activeInspection.options.maxScrolls,
         scrollSettleMs: activeInspection.options.scrollSettleMs,
         waitSelectorConfigured: Boolean(activeInspection.options.waitSelector),

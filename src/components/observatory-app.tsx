@@ -27,7 +27,6 @@ interface InspectOptions {
   observeMs: number;
   terminateMs: number;
   expandLazy: boolean;
-  blockAds: boolean;
   maxScrolls: number;
   scrollSettleMs: number;
   waitSelector: string;
@@ -45,7 +44,6 @@ const defaultInspectOptions: InspectOptions = {
   observeMs: 10_000,
   terminateMs: 90_000,
   expandLazy: false,
-  blockAds: true,
   maxScrolls: 80,
   scrollSettleMs: 250,
   waitSelector: "",
@@ -216,7 +214,6 @@ function GlobalInspector() {
         <label><span>Background observation (ms)</span><input type="number" min="0" step="1000" value={options.observeMs} onChange={(event) => update("observeMs", Math.max(0, Number(event.target.value) || 0))} /></label>
         <label><span>Terminate deadline (ms) <small>0 = disabled</small></span><input type="number" min="0" step="1000" value={options.terminateMs} onChange={(event) => update("terminateMs", Math.max(0, Number(event.target.value) || 0))} /></label>
         <label className="global-inspector__checkbox"><span>Expand lazy content <small>bounded scrolling</small></span><input type="checkbox" checked={options.expandLazy} onChange={(event) => update("expandLazy", event.target.checked)} /></label>
-        <label className="global-inspector__checkbox"><span>Skip ads and analytics</span><input type="checkbox" checked={options.blockAds} onChange={(event) => update("blockAds", event.target.checked)} /></label>
         <label><span>Maximum lazy scrolls</span><input type="number" min="0" max="10000" step="1" value={options.maxScrolls} onChange={(event) => update("maxScrolls", Math.max(0, Math.min(10000, Number(event.target.value) || 0)))} /></label>
         <label><span>Scroll settle (ms)</span><input type="number" min="0" step="50" value={options.scrollSettleMs} onChange={(event) => update("scrollSettleMs", Math.max(0, Number(event.target.value) || 0))} /></label>
         <label><span>User-Agent override</span><input value={options.userAgent} onChange={(event) => update("userAgent", event.target.value)} placeholder="Optional Koko-compatible UA" /></label>
