@@ -5,7 +5,8 @@ import Link from "next/link";
 import { AlertTriangle, ArrowRight, Bot, BrainCircuit, ChevronRight, Eye, EyeOff, Gauge, KeyRound, Lightbulb, LoaderCircle, MessageSquareText, Network, PlugZap, Save, Send, Settings2, ShieldCheck, Sparkles, WandSparkles, XCircle } from "lucide-react";
 import { useSelectionStore, useTelemetryStore, useUIStore } from "@/src/stores";
 import { executionIdFor } from "@/src/executions/types";
-import type { TelemetryEvent, TelemetryKind } from "@/src/core/types";
+import type { TelemetryEvent } from "@/src/core/types";
+import { isMeasuredEvent, metricCategory, percentile } from "@/src/core/metrics";
 
 type InsightSeverity = "critical" | "warning" | "opportunity";
 type Insight = {
@@ -32,11 +33,12 @@ const severityOrder: Record<InsightSeverity, number> = { critical: 0, warning: 1
 
 function buildInsights(events: TelemetryEvent[]): Insight[] {
   if (!events.length) return [];
-  const byDuration = [...events].sort((a, b) => b.duration - a.duration);
+  const measuredEvents = events.filter(isMeasuredEvent);
+  const byDuration = [...measuredEvents].sort((a, b) => b.duration - a.duration);
   const errors = events.filter((event) => event.status === "error");
   const warnings = events.filter((event) => event.status === "warning");
-  const slowRuntime = byDuration.filter((event) => ["javascript", "scheduler", "render"].includes(event.kind) && event.duration >= 50);
-  const slowNetwork = byDuration.filter((event) => event.kind === "network" && event.duration >= 400);
+  const slowRuntime = byDuration.filter((event) => ["javascript", "scheduler", "render"].includes(metricCategory(event) ?? "") && event.duration >= 50);
+  const slowNetwork = byDuration.filter((event) => metricCategory(event) === "network" && event.duration >= 400);
   const repeated = new Map<string, TelemetryEvent[]>();
   for (const event of events) repeated.set(event.name, [...(repeated.get(event.name) ?? []), event]);
   const repeatedWarnings = [...repeated.entries()].filter(([, group]) => group.length >= 3 && group.some((event) => event.status !== "ok")).sort((a, b) => b[1].length - a[1].length)[0];
@@ -72,7 +74,9 @@ function buildInsights(events: TelemetryEvent[]): Insight[] {
     recommendation: "Review warnings in sequence order and confirm whether they are expected capability boundaries or user-visible degradation.",
     impact: "Moderate reliability risk", confidence: 84, evidence: warnings.slice(-5).reverse(),
   });
-  const largestKind = ([...new Set(events.map((event) => event.kind))] as TelemetryKind[]).map((kind) => ({ kind, duration: events.filter((event) => event.kind === kind).reduce((sum, event) => sum + event.duration, 0) })).sort((a, b) => b.duration - a.duration)[0];
+  const largestKind = [...new Set(measuredEvents.map(metricCategory).filter((kind): kind is NonNullable<ReturnType<typeof metricCategory>> => Boolean(kind)))]
+    .map((kind) => ({ kind, duration: measuredEvents.filter((event) => metricCategory(event) === kind).reduce((sum, event) => sum + event.duration, 0) }))
+    .sort((a, b) => b.duration - a.duration)[0];
   if (largestKind) insights.push({
     id: "dominant-work", severity: "opportunity", category: "Performance", title: `${largestKind.kind} dominates measured work`,
     summary: `${largestKind.kind} accounts for ${largestKind.duration.toFixed(1)} ms of accumulated event duration in the active telemetry buffer.`,
@@ -160,7 +164,7 @@ export function AIInsightsPanel() {
     return current ? executionIdFor(current) : undefined;
   }, [inspectionStartedAt, telemetry]);
   const events = useMemo(() => scopeExecutionId && inspectionStartedAt ? telemetry.filter((event) => event.timestamp >= inspectionStartedAt && executionIdFor(event) === scopeExecutionId) : [], [inspectionStartedAt, scopeExecutionId, telemetry]);
-  const p95 = useMemo(() => percentile95(events.map((event) => event.duration)), [events]);
+  const p95 = useMemo(() => percentile(events.filter(isMeasuredEvent).map((event) => event.duration), .95), [events]);
   const baselineInsights = useMemo(() => buildInsights(events), [events]);
   const telemetryVersion = `${events.length}:${events.at(-1)?.id ?? "empty"}`;
   const [generatedFindings, setGeneratedFindings] = useState<{ version: string; items: Insight[] }>();
@@ -372,12 +376,6 @@ function parseGeneratedFindings(value: string, events: TelemetryEvent[]): Insigh
 
 function telemetryVersionFor(events: TelemetryEvent[]) {
   return `${events.length}:${events.at(-1)?.id ?? "empty"}`;
-}
-
-function percentile95(values: number[]) {
-  if (!values.length) return 0;
-  const sorted = [...values].sort((left, right) => left - right);
-  return sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * .95))] ?? 0;
 }
 
 function shortExecutionId(value: string) {

@@ -7,8 +7,8 @@ const compat = new FlatCompat({ baseDirectory: directory });
 
 const config = [
   ...compat.extends("next/core-web-vitals", "next/typescript"),
+  { ignores: ["dist/**", ".next/**", ".vinext/**", "node_modules/**", "next-env.d.ts"] },
   {
-    ignores: ["dist/**", ".next/**", ".vinext/**", "node_modules/**"],
     rules: {
       "@typescript-eslint/no-explicit-any": "error",
       "@typescript-eslint/no-unused-vars": ["error", { argsIgnorePattern: "^_" }],

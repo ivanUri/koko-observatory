@@ -45,7 +45,7 @@ export const useBrowserJourneyStore = create<{
         (event.kind === "network" && (payload.journeyStage === "received" || payload.journeyStage === "response") ? "response" : stageByKind[event.kind]);
       const target = nodes.find((item) => item.id === stage);
       if (!target) continue;
-      target.duration += event.duration; target.timestamp = event.timestamp; target.status = event.status === "error" ? "active" : "complete";
+      target.duration += event.duration; target.timestamp = event.timestamp; target.status = event.status === "error" ? "error" : "complete";
       target.metadata = { events: Number(target.metadata.events ?? 0) + 1, lastEvent: event.name, measurement: typeof payload.measurementState === "string" ? payload.measurementState : "Koko telemetry" };
       if (typeof payload.scriptUrl === "string") target.metadata.scriptUrl = payload.scriptUrl;
       if (typeof payload.scriptKind === "string") target.metadata.scriptKind = payload.scriptKind;

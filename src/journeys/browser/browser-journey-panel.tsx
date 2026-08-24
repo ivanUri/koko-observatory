@@ -14,7 +14,7 @@ import { layoutBrowserFlow, type BrowserFlowData } from "./layout";
 function BrowserCard({ data }: NodeProps) {
   const item = data as unknown as BrowserFlowData;
   const expanded = item.expanded;
-  const statusLabel = item.status === "complete" ? (item.duration > 0 ? "Measured" : "Complete") : item.status === "active" ? "Active" : item.status === "unavailable" ? "Unavailable" : "Awaiting";
+  const statusLabel = item.status === "complete" ? (item.duration > 0 ? "Measured" : "Complete") : item.status === "active" ? "Active" : item.status === "error" ? "Error" : item.status === "unavailable" ? "Unavailable" : "Awaiting";
   return <article className={`journey-node journey-node--${item.status}`}>
     {item.incomingHandles.map((id, index) => <Handle key={id} id={id} type="target" position={Position.Left} style={{ top: `${(index + 1) * 100 / (item.incomingHandles.length + 1)}%` }}/>) }
     <button className="journey-node__summary" onClick={(event) => { event.stopPropagation(); item.onToggle(item.id); }} aria-expanded={expanded}>
@@ -96,14 +96,14 @@ type Trace = ReturnType<typeof useBrowserJourneyStore.getState>["trace"];
 function Empty({ children }: { children: string }) { return <div className="trace-empty">{children}</div>; }
 function NodeDetails({ item, onClose }: { item?: BrowserJourneyNode; onClose: () => void }) {
   if (!item) return null;
-  const measured = item.status === "complete" || item.status === "active";
+  const measured = item.status === "complete" && item.duration > 0;
   const what = `This stage belongs to the ${item.process} process and ${item.thread} thread. Its duration is measured from Koko telemetry when available.`;
   const unavailableReason = item.status === "unavailable" ? "Core has not emitted a typed signal for this browser stage yet." : "No event has reached this stage in the current inspection.";
   return <aside className="trace-view browser-node-details">
     <header><div><small className="trace-kicker">BROWSER STAGE</small><strong>{item.title}</strong></div><button onClick={onClose}>Close</button></header>
     <p>{what}</p><p><strong>What is this?</strong> {item.description}</p>
     <div className="trace-cards">
-      <article><span>Status</span><b>{item.status === "complete" ? (item.duration > 0 ? "Measured" : "Complete boundary") : item.status === "active" ? "Active" : item.status === "unavailable" ? "Unavailable" : "Awaiting"}</b></article>
+      <article><span>Status</span><b>{item.status === "complete" ? (item.duration > 0 ? "Measured" : "Complete boundary") : item.status === "active" ? "Active" : item.status === "error" ? "Error" : item.status === "unavailable" ? "Unavailable" : "Awaiting"}</b></article>
       <article><span>Duration</span><b>{measured ? `${item.duration.toFixed(3)} ms` : "—"}</b></article>
       <article><span>Owner</span><b>{item.process} / {item.thread}</b></article>
     </div>
@@ -138,7 +138,7 @@ function TraceTimeline({ trace }: { trace: Trace }) {
   return <section className="trace-view browser-global-timeline"><header><strong>Execution timeline</strong><span>{filtered.length} of {browserSpans.length} browser spans</span></header>
     <section className="global-timeline-summary">
       <article><span>Visible spans</span><strong>{filtered.length.toLocaleString()}</strong><small>of {browserSpans.length.toLocaleString()} in this browser trace</small></article>
-      <article><span>Measured duration</span><strong>{formatTimelineDuration(total)}</strong><small>{formatTimelineDuration(range)} time range</small></article>
+      <article><span>Total event duration</span><strong>{formatTimelineDuration(total)}</strong><small>{formatTimelineDuration(range)} time range</small></article>
       <article><span>Errors</span><strong className={errors ? "status-text--error" : "status-text--ok"}>{errors}</strong><small>{warnings} warnings</small></article>
       <article><span>Threads</span><strong>{lanes.length}</strong><small>{kinds.length} browser subsystems</small></article>
     </section>
@@ -393,7 +393,7 @@ function CallGraphView({ trace }: { trace: Trace }) {
           {cpuCount > 0 && <span><small>CPUs</small><b>{cpuCount} logical</b></span>}
           {physMem > 0 && <span><small>Physical RAM</small><b>{(physMem / 1024 / 1024 / 1024).toFixed(1)} GB</b></span>}
           {totalCtx > 0 && <span><small>Context switches</small><b>{totalCtx}</b></span>}
-          {ctxValues.length > 0 && <span><small>Final resident</small><b>{((ctxValues[ctxValues.length - 1] ?? 0) / 1024 / 1024).toFixed(0)} MB</b></span>}
+          {memValues.length > 0 && <span><small>Final resident</small><b>{((memValues[memValues.length - 1] ?? 0) / 1024 / 1024).toFixed(0)} MB</b></span>}
         </div>
       )}
 

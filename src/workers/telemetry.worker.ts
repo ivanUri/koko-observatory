@@ -1,6 +1,7 @@
 /// <reference lib="webworker" />
 
 import type { TelemetryEvent, WorkerSnapshot } from "@/src/core/types";
+import { isMeasuredEvent, percentile } from "@/src/core/metrics";
 
 const MAX_EVENTS = 10_000;
 const GRAPH_WINDOW = 500;
@@ -17,7 +18,7 @@ self.onmessage = ({ data }: MessageEvent<{ type: "append"; batch: TelemetryEvent
 
   const durations = events
     .slice(-5_000)
-    .filter(isMeasured)
+    .filter(isMeasuredEvent)
     .map((event) => event.duration)
     .sort((a, b) => a - b);
   const graphSource = events.slice(-GRAPH_WINDOW);
@@ -25,7 +26,7 @@ self.onmessage = ({ data }: MessageEvent<{ type: "append"; batch: TelemetryEvent
   const snapshot: WorkerSnapshot = {
     events: data.batch,
     rates,
-    p95: durations[Math.floor(durations.length * 0.95)] ?? 0,
+    p95: percentile(durations, 0.95),
     graphNodes: graphSource.map((event) => ({
       id: event.id,
       label: event.name,
@@ -45,12 +46,6 @@ function rebuildRates(source: TelemetryEvent[]) {
     buckets.set(second, (buckets.get(second) ?? 0) + 1);
   }
   rates.splice(0, rates.length, ...[...buckets.entries()].sort((a, b) => a[0] - b[0]).slice(-RATE_WINDOW));
-}
-
-function isMeasured(event: TelemetryEvent) {
-  if (!Number.isFinite(event.duration) || event.duration <= 0) return false;
-  const state = String(event.payload.measurementState ?? event.payload.measurement ?? "").toLowerCase();
-  return !["unavailable", "not-timed", "not timed", "boundary", "awaiting"].includes(state);
 }
 
 function buildGraphEdges(source: TelemetryEvent[]) {

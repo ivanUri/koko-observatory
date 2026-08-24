@@ -78,6 +78,11 @@ export async function loadRecentExecutionEvents(limit = 10_000) {
   return records.reverse().map((record) => record.event);
 }
 
+export async function countStoredExecutionEvents() {
+  if (typeof window === "undefined") return 0;
+  return observatoryDb.executionEvents.count();
+}
+
 export async function clearStoredArtifacts() {
   if (typeof window === "undefined") return;
   await Promise.all([

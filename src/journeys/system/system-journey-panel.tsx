@@ -5,6 +5,7 @@ import { useMemo, useState } from "react";
 import { Activity, Cpu, Database, Files, Gauge, MemoryStick, Monitor, Network, Route, Server, Waypoints } from "lucide-react";
 import type { TelemetryEvent } from "@/src/core/types";
 import { useTelemetryStore } from "@/src/stores";
+import { isMeasuredEvent } from "@/src/core/metrics";
 
 type StageKey = "browser-processes" | "thread-scheduler" | "cpu" | "memory" | "file-system" | "socket-layer" | "ipc" | "graphics-pipeline" | "gpu" | "display";
 type Explorer = "processes" | "threads" | "memory" | "io" | "graphics" | "signals";
@@ -86,7 +87,7 @@ export function SystemJourneyPanel() {
 function buildSystemModel(events: TelemetryEvent[]) {
   const systemEvents = events.filter((event) => typeof event.payload.systemStage === "string" || hasAny(event, ["processId", "threadId", "residentMemoryBytes", "cpuPercent", "contextSwitches", "diskReadBytes", "diskWriteBytes"]));
   const latest = latestNumbers(systemEvents, ["cpuPercent", "cpuCoresUsed", "cpuSampleWindowMs", "logicalCpuCount", "contextSwitches", "residentMemoryBytes", "physicalMemoryBytes", "diskReadBytes", "diskWriteBytes", "gpuPercent", "gpuMemoryBytes", "refreshRateHz"]);
-  const stageModels = stages.map((stage) => observeStage(stage, events, systemEvents));
+  const stageModels = stages.map((stage) => observeStage(stage, systemEvents));
   const frames = events.filter((event) => ["frame", "present"].includes(String(event.payload.browserStage ?? event.name)) || event.payload.presentedFrameId != null);
   const connections = uniqueValues(events, ["connectionId", "primaryIp"]);
   return {
@@ -117,19 +118,17 @@ function buildSystemModel(events: TelemetryEvent[]) {
 type SystemModel = ReturnType<typeof buildSystemModel>;
 type StageModel = ReturnType<typeof observeStage>;
 
-function observeStage(stage: (typeof stages)[number], events: TelemetryEvent[], systemEvents: TelemetryEvent[]) {
+function observeStage(stage: (typeof stages)[number], systemEvents: TelemetryEvent[]) {
   const direct = systemEvents.filter((event) => event.payload.systemStage === stage.key);
-  const evidenceEvents = events.filter((event) => stage.fields.some((field) => event.payload[field] != null));
-  const stageEvents = direct.length ? direct : evidenceEvents;
+  const stageEvents = direct;
   const evidence = stage.fields.flatMap((field) => {
     const event = [...stageEvents].reverse().find((candidate) => candidate.payload[field] != null);
     return event ? [`${field}: ${formatPayloadValue(event.payload[field])}`] : [];
   });
-  const hasMeasuredField = evidenceEvents.length > 0;
   const latest = stageEvents.at(-1);
-  const state = stageEvents.some((event) => event.status === "error") ? "error" : hasMeasuredField ? "measured" : direct.length ? "boundary" : "missing";
+  const state = stageEvents.some((event) => event.status === "error") ? "error" : stageEvents.some(isMeasuredEvent) ? "measured" : direct.length ? "boundary" : "missing";
   const duration = direct.reduce((sum, event) => sum + event.duration, 0);
-  return { ...stage, events: stageEvents, latest, evidence, state, duration, label: state === "measured" ? "MEASURED" : state === "boundary" ? "BOUNDARY" : state === "error" ? "ERROR" : "NOT INSTRUMENTED", measure: direct.length ? formatDuration(duration) : evidence.length ? `${evidence.length} counter${evidence.length === 1 ? "" : "s"}` : "Unavailable", measurement: latest ? String(latest.payload.measurementState ?? (hasMeasuredField ? "sampled" : "boundary")) : "Unavailable" };
+  return { ...stage, events: stageEvents, latest, evidence, state, duration, label: state === "measured" ? "MEASURED" : state === "boundary" ? "BOUNDARY" : state === "error" ? "ERROR" : "NOT INSTRUMENTED", measure: direct.length ? formatDuration(duration) : "Unavailable", measurement: latest ? String(latest.payload.measurementState ?? (state === "measured" ? "sampled" : "boundary")) : "Unavailable" };
 }
 
 function aggregateEntities(events: TelemetryEvent[], kind: "process" | "thread") {

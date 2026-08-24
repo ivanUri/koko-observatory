@@ -7,7 +7,7 @@ export interface BrowserJourneyNode {
   description: string;
   duration: number;
   timestamp: number;
-  status: "pending" | "active" | "complete" | "unavailable";
+  status: "pending" | "active" | "complete" | "unavailable" | "error";
   process: string;
   thread: string;
   metadata: Record<string, string | number>;

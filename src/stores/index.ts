@@ -80,7 +80,7 @@ interface TelemetryState {
   status: "connecting" | "live" | "paused" | "offline";
   lastEventAt?: number;
   append: (events: TelemetryEvent[], rate: Array<[number, number]>, p95: number) => void;
-  hydrate: (events: TelemetryEvent[]) => void;
+  hydrate: (events: TelemetryEvent[], persistedTotal?: number) => void;
   setStatus: (status: TelemetryState["status"]) => void;
   setRetention: (retention: number) => void;
   clear: () => void;
@@ -102,8 +102,8 @@ export const useTelemetryStore = create<TelemetryState>((set) => ({
       p95,
       lastEventAt: events.length ? events[events.length - 1].timestamp : state.lastEventAt,
     })),
-  hydrate: (events) => set((state) => {
-    if (!events.length) return state;
+  hydrate: (events, persistedTotal) => set((state) => {
+    if (!events.length) return persistedTotal == null ? state : { ...state, total: Math.max(state.total, persistedTotal) };
     const liveIds = new Set(state.events.map((event) => event.id));
     const restored = events.filter((event) => !liveIds.has(event.id));
     const merged = [...restored, ...state.events]
@@ -111,7 +111,7 @@ export const useTelemetryStore = create<TelemetryState>((set) => ({
       .slice(-Math.min(state.retention, MAX_VISIBLE_EVENTS));
     return {
       events: merged,
-      total: Math.max(state.total, merged.length),
+      total: Math.max(state.total, persistedTotal ?? 0, merged.length),
       lastEventAt: merged.at(-1)?.timestamp ?? state.lastEventAt,
     };
   }),

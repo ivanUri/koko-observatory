@@ -2,12 +2,13 @@
 
 import dynamic from "next/dynamic";
 import Link from "next/link";
-import { useEffect, useMemo, useRef, useState } from "react";
-import { Activity, AlertTriangle, CircleDot, Clock3, Cpu, Database, Filter, Gauge, GitBranch, Grid3x3, List, Network, Share2, Waypoints, Wifi, X, Zap } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Activity, AlertTriangle, CircleDot, Clock3, Cpu, Database, Gauge, GitBranch, Grid3x3, List, Network, Share2, Waypoints, Wifi, X, Zap } from "lucide-react";
 import { RealtimeChart } from "@/src/components/realtime-chart";
 import { useGraphStore, useNetworkStore, useReplayStore, useSelectionStore, useTelemetryStore } from "@/src/stores";
 import type { TelemetryEvent } from "@/src/core/types";
 import { executionIdFor } from "@/src/executions/types";
+import { bucketEventRate, eventsPerSecond, metricCategory, percentile, isMeasuredEvent } from "@/src/core/metrics";
 
 const ExecutionGraph = dynamic(
   () => import("@/src/components/execution-graph").then((module) => module.ExecutionGraph),
@@ -20,17 +21,21 @@ export function OverviewPanel() {
   const status = useTelemetryStore((state) => state.status);
   const [range, setRange] = useState("5m");
   const [inspection, setInspection] = useState("latest");
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 1_000);
+    return () => window.clearInterval(timer);
+  }, []);
   const inspections = useMemo(() => [...new Map(events.flatMap((event) => {
     const id = stringPayload(event.payload, "inspectionId");
     return id ? [[id, stringPayload(event.payload, "requestedUrl") ?? id] as const] : [];
   })).entries()].reverse(), [events]);
   const latestInspection = inspections[0]?.[0];
   const scoped = useMemo(() => {
-    const now = events.at(-1)?.timestamp ?? Date.now();
     const cutoff = range === "all" ? 0 : now - ({ "1m": 60_000, "5m": 300_000, "15m": 900_000 }[range] ?? 300_000);
     const selected = inspection === "latest" ? latestInspection : inspection === "all" ? undefined : inspection;
     return events.filter((event) => event.timestamp >= cutoff && (!selected || event.payload.inspectionId === selected));
-  }, [events, inspection, latestInspection, range]);
+  }, [events, inspection, latestInspection, now, range]);
   const lifecycle = [...scoped].reverse().find((event) => typeof event.payload.inspectionState === "string");
   const measured = scoped.filter(isMeasuredEvent);
   const errors = scoped.filter((event) => event.status === "error").length;
@@ -38,7 +43,7 @@ export function OverviewPanel() {
   const cpu = latestNumber(scoped, "cpuPercent");
   const cpuCoresUsed = latestNumber(scoped, "cpuCoresUsed");
   const cpuWindowMs = latestNumber(scoped, "cpuSampleWindowMs");
-  const memory = latestNumber(scoped, "residentMemoryBytes", "physicalMemoryBytes");
+  const memory = latestNumber(scoped, "residentMemoryBytes");
   const contextSwitches = latestNumber(scoped, "contextSwitches");
   const diskRead = latestNumber(scoped, "diskReadBytes");
   const diskWrite = latestNumber(scoped, "diskWriteBytes");
@@ -46,9 +51,10 @@ export function OverviewPanel() {
   const statusTotal = Math.max(scoped.length, 1);
   const healthy = Math.max(0, scoped.length - errors - warnings);
   const hasTelemetry = scoped.length > 0;
-  const rate = useMemo(() => eventRate(scoped), [scoped]);
-  const stageP95 = (kind: typeof events[number]["kind"]) => formatDuration(percentile(measured.filter((event) => event.kind === kind).map((event) => event.duration), .95));
-  const stageP95Raw = (kind: typeof events[number]["kind"]) => percentile(measured.filter((event) => event.kind === kind).map((event) => event.duration), .95);
+  const rate = useMemo(() => bucketEventRate(scoped), [scoped]);
+  const currentRate = eventsPerSecond(scoped, now);
+  const stageP95 = (kind: "network" | "javascript" | "render" | "dom" | "scheduler" | "memory") => formatDuration(stageP95Raw(kind));
+  const stageP95Raw = (kind: "network" | "javascript" | "render" | "dom" | "scheduler" | "memory") => percentile(measured.filter((event) => metricCategory(event) === kind).map((event) => event.duration), .95);
 
   const journeySummary = (["internet", "browser", "system"] as const).map((journey) => {
     const source = scoped.filter((event) => belongsToJourney(event, journey));
@@ -69,7 +75,7 @@ export function OverviewPanel() {
   // Top slowest stages
   const ALL_KINDS = ["network", "javascript", "render", "dom", "scheduler", "memory"] as const;
   const slowestStages = ALL_KINDS
-    .map((kind) => ({ kind, p95: stageP95Raw(kind), count: measured.filter((e) => e.kind === kind).length }))
+    .map((kind) => ({ kind, p95: stageP95Raw(kind), count: measured.filter((event) => metricCategory(event) === kind).length }))
     .filter((s) => s.p95 > 0)
     .sort((a, b) => b.p95 - a.p95);
   const maxStageP95 = Math.max(...slowestStages.map((s) => s.p95), 1);
@@ -155,7 +161,7 @@ export function OverviewPanel() {
       {/* Key metrics */}
       <div className="metric-grid">
         <Metric label="Page lifecycle" value={hasTelemetry ? browserState : "—"} delta={statusLabel(status)} icon={Activity} />
-        <Metric label="Signals received" value={totalSignals > 0 ? formatNumber(totalSignals) : "—"} delta={`${formatNumber(scoped.length)} in scope · ${measured.length} timed · ${(rate.at(-1)?.[1] ?? 0).toFixed(1)}/s`} icon={Activity} />
+        <Metric label="Signals received" value={totalSignals > 0 ? formatNumber(totalSignals) : "—"} delta={`${formatNumber(scoped.length)} in scope · ${events.length} retained · ${currentRate.toFixed(1)}/s`} icon={Activity} />
         <Metric label="Error rate" value={hasTelemetry ? `${(errors / statusTotal * 100).toFixed(2)}%` : "—"} delta={`${errors} errors · ${warnings} warnings`} icon={CircleDot} />
         <Metric label="Measured P95" value={formatDuration(p95)} delta="across all measured stages" icon={Clock3} />
         <Metric label="CPU capacity" value={cpu == null ? "—" : `${cpu.toFixed(1)}%`} delta={cpu == null ? "Signal unavailable" : cpuCoresUsed == null ? "CPU sample warming up" : `≈ ${cpuCoresUsed.toFixed(2)} cores · ${(cpuWindowMs ?? 0).toFixed(0)} ms window`} icon={Cpu} />
@@ -319,7 +325,7 @@ export function TimelinePanel() {
     <PanelFrame eyebrow="Observatory / All telemetry" title="Global Telemetry Timeline" description="Chronological signals across Internet, Browser, System and runtime diagnostics.">
       <section className="global-timeline-summary">
         <article><span>Visible events</span><strong>{filtered.length.toLocaleString()}</strong><small>of {events.length.toLocaleString()} buffered</small></article>
-        <article><span>Measured duration</span><strong>{formatDuration(duration)}</strong><small>{formatTimelineOffset(range)} time range</small></article>
+        <article><span>Total event duration</span><strong>{formatDuration(duration)}</strong><small>{formatTimelineOffset(range)} time range</small></article>
         <article><span>Errors</span><strong className={errors ? "status-text--error" : "status-text--ok"}>{errors}</strong><small>{warnings} warnings</small></article>
         <article><span>Sessions</span><strong>{new Set(filtered.map((event) => event.sessionId)).size}</strong><small>{lanes.length} active subsystems</small></article>
       </section>
@@ -385,12 +391,14 @@ export function GraphPanel() {
     .filter((event) => !(event.kind === "log" && typeof event.payload.inspectionState === "string"))
     .map((event) => event.sessionId))];
   const activeSession = sessionFilter ?? sessions.at(-1) ?? "all";
-  const eventById = new Map(events.map((event) => [event.id, event]));
-  const visibleNodes = useMemo(() => nodes.filter((node) => {
-    const event = eventById.get(node.id);
+  const visibleNodes = useMemo(() => {
+    const eventById = new Map(events.map((event) => [event.id, event]));
+    return nodes.filter((node) => {
+      const event = eventById.get(node.id);
     const text = `${node.label} ${node.kind} ${String(event?.payload.url ?? "")}`.toLowerCase();
     return (activeSession === "all" || event?.sessionId === activeSession) && (kindFilter === "all" || node.kind === kindFilter) && (statusFilter === "all" || node.status === statusFilter) && (!query || text.includes(query.toLowerCase()));
-  }).slice(-300), [nodes, eventById, activeSession, kindFilter, statusFilter, query]);
+    }).slice(-300);
+  }, [activeSession, events, kindFilter, nodes, query, statusFilter]);
   const visibleIds = useMemo(() => new Set(visibleNodes.map((n) => n.id)), [visibleNodes]);
   const visibleEdges = useMemo(() => edges.filter((edge) => visibleIds.has(edge.source) && visibleIds.has(edge.target)), [edges, visibleIds]);
   const parentEdges = visibleEdges.filter((edge) => edge.relation !== "sequence").length;
@@ -457,7 +465,7 @@ export function GraphPanel() {
           )}
           {viewMode === "matrix" && (
             visibleNodes.length
-              ? <DependencyMatrix nodes={visibleNodes} edges={visibleEdges} events={events} selectedId={selectedId} onSelect={select} />
+              ? <DependencyMatrix nodes={visibleNodes} edges={visibleEdges} events={events} />
               : <GraphEmptyNew label="Dependency Matrix" description="Subsystem interaction heatmap. Run the inspector to capture telemetry." />
           )}
           {viewMode === "flow" && (
@@ -694,15 +702,15 @@ function CausalTree({ nodes, edges, events, selectedId, onSelect }: {
 
 /* ─── Dependency Matrix ───────────────────────────────────────────────────── */
 
-function DependencyMatrix({ nodes, edges, events, selectedId, onSelect }: {
-  nodes: GraphNode[]; edges: GraphEdge[]; events: TelemetryEvent[]; selectedId?: string; onSelect: (id?: string) => void;
+function DependencyMatrix({ nodes, edges, events }: {
+  nodes: GraphNode[]; edges: GraphEdge[]; events: TelemetryEvent[];
 }) {
   const eventById = useMemo(() => new Map(events.map((e) => [e.id, e])), [events]);
-  const subsystemKey = (id: string, fallback: string) => {
+  const subsystemKey = useCallback((id: string, fallback: string) => {
     const event = eventById.get(id);
     return String(event?.payload.processName ?? event?.payload.browserStage ?? event?.payload.systemStage ?? event?.payload.journeyStage ?? fallback);
-  };
-  const nodeGroup = useMemo(() => new Map(nodes.map((n) => [n.id, subsystemKey(n.id, n.kind)])), [nodes, eventById]);
+  }, [eventById]);
+  const nodeGroup = useMemo(() => new Map(nodes.map((n) => [n.id, subsystemKey(n.id, n.kind)])), [nodes, subsystemKey]);
   const systems = useMemo(() => [...new Set([...nodeGroup.values()])].sort(), [nodeGroup]);
 
   const counts = useMemo(() => {
@@ -855,7 +863,7 @@ export function NetworkPanel() {
           <Network size={16} />
           <div>
             <strong>No network events captured yet</strong>
-            <span>Koko core must emit <code>kind: "network"</code> events with <code>journeyStage</code> (queue, dns, tcp, tls, request, server, response, received) to populate this panel. Inspect a URL to trigger a capture.</span>
+            <span>Koko core must emit <code>kind: &quot;network&quot;</code> events with <code>journeyStage</code> (queue, dns, tcp, tls, request, server, response, received) to populate this panel. Inspect a URL to trigger a capture.</span>
           </div>
           <div className="network-pending-fields">
             <span>Required for request list</span>
@@ -910,7 +918,8 @@ function aggregateNetworkRequests(events: TelemetryEvent[]) {
     const payload = event.payload;
     const execution = executionIdFor(event);
     const url = String(payload.url ?? payload.requestedUrl ?? "URL unavailable");
-    const base = `${execution}|${url}`;
+    const requestId = payload.requestId == null ? undefined : String(payload.requestId);
+    const base = requestId ? `${execution}|request:${requestId}` : `${execution}|url:${url}`;
     const stage = String(payload.journeyStage ?? event.name);
     const current = active.get(base);
     const startsTransfer = stage === "queue" || !current || current.seen.has(stage) || current.seen.has("received");
@@ -977,7 +986,7 @@ function NetworkPayload({ request }: { request: NetworkRequest }) {
       {body ? (
         <>
           <div className="network-payload__meta">
-            <span>Request body · {body.length} bytes</span>
+            <span>Request body · {new TextEncoder().encode(body).byteLength} bytes</span>
             {isJson && <span className="network-payload__type">JSON</span>}
           </div>
           <pre className="network-payload__body">{isJson ? JSON.stringify(JSON.parse(body), null, 2) : body}</pre>
@@ -1086,10 +1095,6 @@ function EventTable({ events, network }: { events: ReturnType<typeof useTelemetr
   return <div className="event-table" role="table"><div className="event-row event-row--header" role="row"><span>Signal</span><span>Subsystem</span><span>{network ? "Endpoint" : "Sequence"}</span><span>Duration</span><span>Status</span></div>{events.length === 0 ? <div className="empty-row">Waiting for telemetry…</div> : events.map((event) => <div className="event-row" role="row" key={event.id}><span><i className={`event-dot event-dot--${event.status}`} />{event.name}</span><span className="tag">{event.kind}</span><span className="mono">{network ? String(event.payload.url ?? "—") : `#${event.sequence}`}</span><span className="mono">{event.duration.toFixed(1)} ms</span><span className={`status-text status-text--${event.status}`}>{event.status}</span></div>)}</div>;
 }
 
-function GraphEmpty() {
-  return <div className="graph-empty"><strong>Waiting for execution graph telemetry</strong><span>Run the global URL inspector. Nodes appear when normalized events arrive; edges require parentId or call-parent signals from core.</span></div>;
-}
-
 function GraphEventDetails({ event }: { event: ReturnType<typeof useTelemetryStore.getState>["events"][number] }) {
   const payload = event.payload;
   const rows = [
@@ -1145,7 +1150,6 @@ function QualityRow({ label, value, ok }: { label: string; value: string; ok: bo
 function PanelLoader({ label }: { label: string }) { return <div className="panel-loader"><span />{label}</div>; }
 function LivePill() { const status = useTelemetryStore((state) => state.status); return <span className={`live-pill live-pill--${status}`}><i />{status}</span>; }
 function formatNumber(value: number) { return new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 }).format(value); }
-function percentile(values: number[], rank: number) { if (!values.length) return 0; const sorted = [...values].sort((a, b) => a - b); return sorted[Math.min(sorted.length - 1, Math.floor((sorted.length - 1) * rank))]; }
 function formatDuration(value: number) { return value > 0 ? `${value.toFixed(1)} ms` : "—"; }
 function formatTimelineOffset(value: number) { if (value >= 60_000) return `${(value / 60_000).toFixed(2)} min`; if (value >= 1000) return `${(value / 1000).toFixed(2)} s`; if (value >= 1) return `${value.toFixed(1)} ms`; return `${(value * 1000).toFixed(0)} µs`; }
 function classifyJourney(event: ReturnType<typeof useTelemetryStore.getState>["events"][number]) {
@@ -1161,8 +1165,6 @@ function belongsToJourney(event: TelemetryEvent, journey: "internet" | "browser"
 }
 function formatBytes(value: number) { if (value >= 1024 * 1024) return `${(value / (1024 * 1024)).toFixed(1)} MB`; if (value >= 1024) return `${(value / 1024).toFixed(1)} KB`; return `${value.toFixed(0)} B`; }
 function latestNumber(events: ReturnType<typeof useTelemetryStore.getState>["events"], ...keys: string[]) { for (let index = events.length - 1; index >= 0; index -= 1) { for (const key of keys) { const value = events[index].payload[key]; if (typeof value === "number" && Number.isFinite(value)) return value; } } return undefined; }
-function isMeasuredEvent(event: TelemetryEvent) { const state = String(event.payload.measurementState ?? event.payload.measurement ?? "").toLowerCase(); return event.duration > 0 && Number.isFinite(event.duration) && !["unavailable", "not-timed", "not timed", "boundary", "awaiting"].includes(state); }
-function eventRate(events: TelemetryEvent[]) { const buckets = new Map<number, number>(); events.forEach((event) => { const second = Math.floor(event.timestamp / 1000) * 1000; buckets.set(second, (buckets.get(second) ?? 0) + 1); }); return [...buckets.entries()].sort((a, b) => a[0] - b[0]); }
 function statusLabel(status: ReturnType<typeof useTelemetryStore.getState>["status"]) { return status === "live" ? "streaming" : status; }
 function barWidth(value: number, events: ReturnType<typeof useTelemetryStore.getState>["events"]) { const max = Math.max(1, percentile(events.map((event) => event.duration), .99)); return `${Math.min(100, value / max * 100)}%`; }
 function barWidthFromValue(value: string) { const number = Number.parseFloat(value); return Number.isFinite(number) ? `${Math.min(100, number / 200 * 100)}%` : "0%"; }

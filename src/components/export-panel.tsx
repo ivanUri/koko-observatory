@@ -133,7 +133,7 @@ export function ExportPanel() {
       {site && !site.complete && <div className="export-streaming"><span className="export-streaming__dot" />{responseIsJson ? "Capturing API response · updates while the inspection is running" : "Streaming document preview · updates while the inspection is running"}</div>}
       {site?.bodyTruncated && <div className="export-warning"><AlertTriangle size={15} /><span>The HTML response was truncated by the Core capture limit. JSON and Markdown remain available, but HTML is not a complete document.</span></div>}
       <section className="panel-card export-card">
-        <header className="card-header"><div><h2><Package size={15} />Choose site format</h2><p>These files contain the inspected site, not Observatory benchmark telemetry.</p></div><span className="export-card__size">{available ? formatBytes(content.length) : "Unavailable"}</span></header>
+        <header className="card-header"><div><h2><Package size={15} />Choose site format</h2><p>These files contain the inspected site, not Observatory benchmark telemetry.</p></div><span className="export-card__size">{available ? formatBytes(byteLength(content)) : "Unavailable"}</span></header>
         <div className="export-format-grid">
           {formatOptions.map((option) => {
             const Icon = option.icon;
@@ -276,6 +276,10 @@ function formatBytes(value: number) {
   if (value < 1024) return `${value} B`;
   if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
   return `${(value / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function byteLength(value: string) {
+  return new TextEncoder().encode(value).byteLength;
 }
 
 function htmlPreviewDocument(html: string, baseUrl?: string) {

@@ -13,7 +13,7 @@ import { useExportStore, useGraphStore, useSettingsStore, useTelemetryStore, use
 import { useInternetJourneyStore } from "@/src/journeys/internet/store";
 import { useBrowserJourneyStore } from "@/src/journeys/browser/store";
 import { useExecutionStore } from "@/src/executions/store";
-import { loadRecentExecutionEvents } from "@/src/executions/artifact-store";
+import { countStoredExecutionEvents, loadRecentExecutionEvents } from "@/src/executions/artifact-store";
 import { useAutomationStore } from "@/src/automation/store";
 
 const queryClient = new QueryClient({
@@ -82,8 +82,8 @@ function ObservatoryRuntime({ initialPlugin }: { initialPlugin: string }) {
 
   useEffect(() => {
     let cancelled = false;
-    void loadRecentExecutionEvents().then((events) => {
-      if (!cancelled) useTelemetryStore.getState().hydrate(events);
+    void Promise.all([loadRecentExecutionEvents(), countStoredExecutionEvents()]).then(([events, persistedTotal]) => {
+      if (!cancelled) useTelemetryStore.getState().hydrate(events, persistedTotal);
     }).catch(() => undefined);
     return () => { cancelled = true; };
   }, []);

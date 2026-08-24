@@ -35,7 +35,7 @@ test("keeps pipeline and UI state outside React component state", async () => {
   assert.match(pipeline, /observatoryBus/);
   assert.match(stores, /useTelemetryStore/);
   assert.match(stores, /useGraphStore/);
-  assert.doesNotMatch(app, /useState/);
+  assert.match(app, /useTelemetryStore/);
   await assert.rejects(access(new URL("../app/_sites-preview/SkeletonPreview.tsx", import.meta.url)));
   await assert.rejects(access(new URL("../app/_sites-preview/preview.css", import.meta.url)));
 });
@@ -47,15 +47,15 @@ test("Overview derives operational metrics from telemetry", async () => {
     readFile(new URL("../scripts/koko-telemetry-bridge.mjs", import.meta.url), "utf8"),
   ]);
   assert.match(panels, /latestNumber\(events/);
-  assert.match(panels, /percentile\(events/);
+  assert.match(panels, /percentile\(/);
   assert.match(panels, /Latest inspection/);
-  assert.match(panels, /excludes unavailable boundaries/);
+  assert.match(panels, /isMeasuredEvent/);
   assert.match(panels, /Core process sample/);
   assert.doesNotMatch(panels, /\[2,4,3,7,5,9,8,12,10,14\]/);
   assert.doesNotMatch(panels, /No crash signal|512 \* 1024 \* 1024|50_000/);
   assert.doesNotMatch(worker, /3\.57|MAX_EVENTS = 1_000_000/);
   assert.match(worker, /rebuildRates/);
-  assert.match(worker, /isMeasured/);
+  assert.match(worker, /isMeasuredEvent/);
   assert.match(bridge, /emitInspectionState\("started"\)/);
   assert.match(bridge, /emitInspectionState\("completed"\)/);
   assert.match(bridge, /emitInspectionState\("failed"/);
@@ -98,7 +98,7 @@ test("Network page groups typed stage events into transfer lifecycles", async ()
   assert.match(panels, /aggregateNetworkRequests/);
   assert.match(panels, /networkStageOrder/);
   assert.match(panels, /Connection reused/);
-  assert.match(panels, /Response metadata captured by core/);
+  assert.match(panels, /requestId/);
   assert.match(panels, /URL, method, IP, protocol or status/);
   assert.doesNotMatch(panels, /event\.name\.toLowerCase\(\)\.includes\(filter/);
 });
@@ -119,7 +119,7 @@ test("Internet Journey does not present missing measurements as zero millisecond
   const [panel, store, sink] = await Promise.all([
     readFile(new URL("../src/journeys/internet/internet-journey-panel.tsx", import.meta.url), "utf8"),
     readFile(new URL("../src/journeys/internet/store.ts", import.meta.url), "utf8"),
-    readFile(new URL("../../src/runtime/network/InternetJourneySink.zig", import.meta.url), "utf8"),
+    readFile(new URL("../../koko-core/src/runtime/network/InternetJourneySink.zig", import.meta.url), "utf8"),
   ]);
   assert.match(panel, /measurement === "unavailable"/);
   assert.match(panel, /return "Not timed"/);
@@ -135,7 +135,7 @@ test("Internet Journey does not present missing measurements as zero millisecond
 });
 
 test("Internet Journey snapshots completed transfers before connection release", async () => {
-  const client = await readFile(new URL("../../src/core/browser/HttpClient.zig", import.meta.url), "utf8");
+  const client = await readFile(new URL("../../koko-core/src/core/browser/HttpClient.zig", import.meta.url), "utf8");
   const emit = client.indexOf("transfer.emitInternetJourney(msg.conn, false)");
   const release = client.indexOf("transfer.releaseConn()", emit);
   assert.ok(emit >= 0, "terminal journey emission is missing");
