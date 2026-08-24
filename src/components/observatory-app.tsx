@@ -5,15 +5,16 @@ import Link from "next/link";
 import { motion } from "framer-motion";
 import { ChevronDown, Clock3, Database, FileDown, Globe2, Settings, Sparkles, SlidersHorizontal } from "lucide-react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { DemoTransport, WebSocketTransport } from "@/src/core/transport";
+import { WebSocketTransport } from "@/src/core/transport";
 import { TelemetryPipeline } from "@/src/core/pipeline";
 import { observatoryBus } from "@/src/core/event-bus";
 import { getPlugin, plugins } from "@/src/plugins/registry";
-import { useExportStore, useGraphStore, useTelemetryStore, useUIStore } from "@/src/stores";
+import { useExportStore, useGraphStore, useSettingsStore, useTelemetryStore, useUIStore } from "@/src/stores";
 import { useInternetJourneyStore } from "@/src/journeys/internet/store";
 import { useBrowserJourneyStore } from "@/src/journeys/browser/store";
 import { useExecutionStore } from "@/src/executions/store";
 import { loadRecentExecutionEvents } from "@/src/executions/artifact-store";
+import { useAutomationStore } from "@/src/automation/store";
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { staleTime: 30_000, refetchOnWindowFocus: false } },
@@ -70,14 +71,14 @@ function ObservatoryRuntime({ initialPlugin }: { initialPlugin: string }) {
   const toggleSidebar = useUIStore((state) => state.toggleSidebar);
   const plugin = getPlugin(activePlugin);
   const ActivePanel = plugin.component;
-  const pipeline = useMemo(() => {
-    const endpoint = process.env.NEXT_PUBLIC_KOKO_TELEMETRY_URL;
-    // The UI is also expected to work when started without the optional
-    // telemetry bridge. Keep that local standalone mode on demo transport.
-    const demo = process.env.NEXT_PUBLIC_KOKO_DEMO === "1" || !endpoint;
-    return new TelemetryPipeline(demo ? new DemoTransport() : new WebSocketTransport(endpoint));
-  }, []);
+  const telemetryEndpoint = useSettingsStore((state) => state.telemetryEndpoint);
+  const telemetryRetention = useSettingsStore((state) => state.retention);
+  const hydrateSettings = useSettingsStore((state) => state.hydrate);
+  const setTelemetryRetention = useTelemetryStore((state) => state.setRetention);
+  const pipeline = useMemo(() => new TelemetryPipeline(new WebSocketTransport(telemetryEndpoint)), [telemetryEndpoint]);
   useEffect(() => setActivePlugin(initialPlugin), [initialPlugin, setActivePlugin]);
+  useEffect(() => hydrateSettings(), [hydrateSettings]);
+  useEffect(() => setTelemetryRetention(telemetryRetention), [setTelemetryRetention, telemetryRetention]);
 
   useEffect(() => {
     let cancelled = false;
@@ -91,6 +92,11 @@ function ObservatoryRuntime({ initialPlugin }: { initialPlugin: string }) {
     const unsubscribeStatus = observatoryBus.on("status", (status) => useTelemetryStore.getState().setStatus(status));
     const unsubscribeExportProgress = observatoryBus.on("exportProgress", (event) => {
       useExportStore.getState().setProgress(event);
+    });
+    const unsubscribeDataCleared = observatoryBus.on("dataCleared", () => {
+      useTelemetryStore.getState().clear();
+      useExecutionStore.getState().clear();
+      useAutomationStore.getState().clear();
     });
     const unsubscribe = observatoryBus.on("snapshot", (snapshot) => {
       useTelemetryStore.getState().append(snapshot.events, snapshot.rates, snapshot.p95);
@@ -119,14 +125,21 @@ function ObservatoryRuntime({ initialPlugin }: { initialPlugin: string }) {
       pipeline.send(JSON.stringify(command));
     };
     const replay = (event: Event) => pipeline.send(JSON.stringify({ type: "execution.replay", ...(event as CustomEvent<Record<string, unknown>>).detail }));
+    const clearExecutionData = () => pipeline.send(JSON.stringify({ type: "execution.clear-all" }));
+    const automation = (event: Event) => pipeline.send(JSON.stringify((event as CustomEvent<Record<string, unknown>>).detail));
     window.addEventListener("koko:inspect-url", inspect);
     window.addEventListener("koko:execution-replay", replay);
+    window.addEventListener("koko:clear-execution-data", clearExecutionData);
+    window.addEventListener("koko:automation", automation);
     return () => {
       window.removeEventListener("koko:inspect-url", inspect);
       window.removeEventListener("koko:execution-replay", replay);
+      window.removeEventListener("koko:clear-execution-data", clearExecutionData);
+      window.removeEventListener("koko:automation", automation);
       unsubscribe();
       unsubscribeStatus();
       unsubscribeExportProgress();
+      unsubscribeDataCleared();
       unsubscribeRaw();
       pipeline.stop();
     };
@@ -165,7 +178,7 @@ function ObservatoryRuntime({ initialPlugin }: { initialPlugin: string }) {
           <Link href="/ai-insights" className={activePlugin === "ai-insights" ? "nav-item nav-item--active" : "nav-item"} title="AI insights"><Sparkles size={16} /><span>AI insights</span><em>Beta</em></Link>
         </nav>
         <div className="sidebar-footer">
-          <button className="nav-item"><Settings size={16} /><span>Settings</span></button>
+          <Link href="/settings" className={activePlugin === "settings" ? "nav-item nav-item--active" : "nav-item"} title="Settings"><Settings size={16} /><span>Settings</span></Link>
           {!collapsed && <><div className="runtime-control"><span><i />Live</span><strong>1s⌄</strong></div><div className="runtime-control"><span><Clock3 size={14} />Last 15 minutes</span><strong>⌄</strong></div></>}
         </div>
       </aside>
@@ -184,7 +197,32 @@ function GlobalInspector() {
   const inspecting = useUIStore((state) => state.inspecting);
   const setUrl = useUIStore((state) => state.setInspectorUrl);
   const [advancedOpen, setAdvancedOpen] = useState(false);
-  const [options, setOptions] = useState<InspectOptions>(defaultInspectOptions);
+  const settings = useSettingsStore();
+  const settingsDefaults = useMemo<InspectOptions>(() => ({
+    ...defaultInspectOptions,
+    waitUntil: settings.waitUntil,
+    waitMs: settings.waitMs,
+    observeMs: settings.observeMs,
+    terminateMs: settings.terminateMs,
+    expandLazy: settings.expandLazy,
+    maxScrolls: settings.maxScrolls,
+    scrollSettleMs: settings.scrollSettleMs,
+    includeFrames: settings.includeFrames,
+  }), [settings.expandLazy, settings.includeFrames, settings.maxScrolls, settings.observeMs, settings.scrollSettleMs, settings.terminateMs, settings.waitMs, settings.waitUntil]);
+  const [options, setOptions] = useState<InspectOptions>(() => settingsDefaults);
+  useEffect(() => {
+    setOptions((current) => ({
+      ...current,
+      waitUntil: settingsDefaults.waitUntil,
+      waitMs: settingsDefaults.waitMs,
+      observeMs: settingsDefaults.observeMs,
+      terminateMs: settingsDefaults.terminateMs,
+      expandLazy: settingsDefaults.expandLazy,
+      maxScrolls: settingsDefaults.maxScrolls,
+      scrollSettleMs: settingsDefaults.scrollSettleMs,
+      includeFrames: settingsDefaults.includeFrames,
+    }));
+  }, [settingsDefaults]);
   const submit = (event: React.FormEvent) => {
     event.preventDefault();
     if (!url.trim() || inspecting) return;
@@ -199,7 +237,17 @@ function GlobalInspector() {
     useUIStore.getState().setInspecting(true);
     window.dispatchEvent(new CustomEvent("koko:inspect-url", { detail: { url, options } }));
   };
-  const update = <K extends keyof InspectOptions>(key: K, value: InspectOptions[K]) => setOptions((current) => ({ ...current, [key]: value }));
+  const update = <K extends keyof InspectOptions>(key: K, value: InspectOptions[K]) => {
+    setOptions((current) => ({ ...current, [key]: value }));
+    if (key === "waitUntil") settings.update({ waitUntil: value as WaitUntil });
+    if (key === "waitMs") settings.update({ waitMs: value as number });
+    if (key === "observeMs") settings.update({ observeMs: value as number });
+    if (key === "terminateMs") settings.update({ terminateMs: value as number });
+    if (key === "expandLazy") settings.update({ expandLazy: value as boolean });
+    if (key === "maxScrolls") settings.update({ maxScrolls: value as number });
+    if (key === "scrollSettleMs") settings.update({ scrollSettleMs: value as number });
+    if (key === "includeFrames") settings.update({ includeFrames: value as boolean });
+  };
   return <form className={inspecting ? "global-inspector global-inspector--loading" : "global-inspector"} onSubmit={submit} aria-label="Global URL inspector">
     <div className="global-inspector__bar">
       <Globe2 size={14} />
@@ -208,8 +256,9 @@ function GlobalInspector() {
       <button type="submit" disabled={inspecting}>{inspecting ? "Inspecting…" : "Inspect URL"}</button>
     </div>
     {advancedOpen && <section className="global-inspector__advanced" aria-label="Advanced inspection options">
-      <header><div><strong>Advanced run options</strong><span>These values apply to the next Inspect URL run.</span></div><button type="button" className="global-inspector__reset" onClick={() => setOptions(defaultInspectOptions)}>Reset</button></header>
+      <header><div><strong>Advanced run options</strong><span>Shared values stay in sync with Settings and apply to the next run.</span></div><button type="button" className="global-inspector__reset" onClick={() => setOptions((current) => ({ ...current, ...settingsDefaults }))}>Reset</button></header>
       <div className="global-inspector__fields">
+        <label><span>Wait until</span><select value={options.waitUntil} onChange={(event) => update("waitUntil", event.target.value as WaitUntil)}><option value="domcontentloaded">DOMContentLoaded</option><option value="load">Load</option><option value="domstable">DOM stable</option><option value="networkidle">Network idle</option><option value="done">Done</option></select></label>
         <label><span>Wait timeout (ms)</span><input type="number" min="0" step="1000" value={options.waitMs} onChange={(event) => update("waitMs", Math.max(0, Number(event.target.value) || 0))} /></label>
         <label><span>Background observation (ms)</span><input type="number" min="0" step="1000" value={options.observeMs} onChange={(event) => update("observeMs", Math.max(0, Number(event.target.value) || 0))} /></label>
         <label><span>Terminate deadline (ms) <small>0 = disabled</small></span><input type="number" min="0" step="1000" value={options.terminateMs} onChange={(event) => update("terminateMs", Math.max(0, Number(event.target.value) || 0))} /></label>
@@ -222,9 +271,13 @@ function GlobalInspector() {
         <label><span>Import cookie JSON <small>optional file upload</small></span><input type="file" accept="application/json,.json" onChange={(event) => { const file = event.target.files?.[0]; if (!file) return; void file.text().then((value) => { update("cookieJson", value); update("cookiePath", ""); }); }} /></label>
         <label className="global-inspector__checkbox"><span>Include iframe documents</span><input type="checkbox" checked={options.includeFrames} onChange={(event) => update("includeFrames", event.target.checked)} /></label>
         <label className="global-inspector__field--wide"><span>Wait script (optional expression)</span><input value={options.waitScript} onChange={(event) => update("waitScript", event.target.value)} placeholder="window.__APP_READY__ === true" /></label>
-        <label className="global-inspector__field--wide"><span>Fixed request headers <small>Name: value, one per line</small></span><textarea value={options.extraHeaders} onChange={(event) => update("extraHeaders", event.target.value)} placeholder={"Authorization: Bearer …\nX-Demo-Run: true"} rows={3} /></label>
+        <label className="global-inspector__field--wide global-inspector__headers-field">
+          <span className="global-inspector__field-title"><strong>Fixed request headers</strong><small>Applied to navigation and subresources</small></span>
+          <textarea aria-describedby="fixed-headers-help" value={options.extraHeaders} onChange={(event) => update("extraHeaders", event.target.value)} placeholder={"Authorization: Bearer …\nX-Trace-ID: observatory-run"} rows={5} spellCheck={false} />
+          <small id="fixed-headers-help" className="global-inspector__field-help">Enter one <code>Name: value</code> pair per line. Leave blank if the page does not need custom headers.</small>
+        </label>
       </div>
-      <p className="global-inspector__hint">Koko reports lifecycle milestones as they happen, shows an early preview, and keeps servicing the page for the background observation window. Enable bounded lazy expansion for infinite-scroll pages; custom headers apply to navigation and subresources.</p>
+      <p className="global-inspector__hint">Koko reports lifecycle milestones as they happen, shows an early preview, and keeps servicing the page for the background observation window. Enable bounded lazy expansion for infinite-scroll pages.</p>
     </section>}
   </form>;
 }

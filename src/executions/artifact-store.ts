@@ -78,6 +78,21 @@ export async function loadRecentExecutionEvents(limit = 10_000) {
   return records.reverse().map((record) => record.event);
 }
 
+export async function clearStoredArtifacts() {
+  if (typeof window === "undefined") return;
+  await Promise.all([
+    observatoryDb.sessions.clear(),
+    observatoryDb.events.clear(),
+    observatoryDb.snapshots.clear(),
+    observatoryDb.recordings.clear(),
+    observatoryDb.executions.clear(),
+    observatoryDb.executionEvents.clear(),
+    observatoryDb.checkpoints.clear(),
+    observatoryDb.branches.clear(),
+    observatoryDb.automationWorkflows.clear(),
+  ]);
+}
+
 export async function persistCheckpoint(checkpoint: CheckpointRecord) {
   if (typeof window !== "undefined") await observatoryDb.checkpoints.put(checkpoint);
 }

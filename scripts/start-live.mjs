@@ -6,7 +6,7 @@ const env = {
 };
 
 const bridge = spawn(process.execPath, [resolve("scripts/koko-telemetry-bridge.mjs")], { env, stdio: "inherit" });
-const web = spawn("npm", ["run", "dev"], { env, stdio: "inherit" });
+const web = spawn("vinext", ["dev"], { env, stdio: "inherit" });
 const shutdown = () => { bridge.kill("SIGTERM"); web.kill("SIGTERM"); };
 process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);

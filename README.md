@@ -47,8 +47,8 @@ The transport expects the existing `TelemetryEvent` JSON envelope. Network
 events can enrich the journey by including `payload.journeyStage` (`dns`,
 `tcp`, `tls`, `request`, `routing`, `server`, or `response`) plus optional
 `url`, `responseStatus`, and `responseBodyBytes`. The UI updates durations and
-metadata from those events in realtime. Without the variable, the existing
-local demo transport remains available for UI development.
+metadata from those events in realtime. Without an explicit endpoint, the UI
+connects to `ws://127.0.0.1:9223/telemetry`.
 
 ### End-to-end local run
 

@@ -70,7 +70,6 @@ Compatibility, Performance, and AI can ship as independent plugins.
 
 ## Production integration
 
-The current demo transport is intentionally replaceable. Connecting Koko
-requires a telemetry WebSocket endpoint that emits the normalized event
-envelope in `src/core/types.ts`. Binary framing can be introduced inside the
-parser while preserving the same worker and UI contract.
+Koko connects through a telemetry WebSocket endpoint that emits the normalized
+event envelope in `src/core/types.ts`. Binary framing can be introduced inside
+the parser while preserving the same worker and UI contract.

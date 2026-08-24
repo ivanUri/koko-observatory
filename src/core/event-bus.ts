@@ -1,8 +1,11 @@
 import type { TelemetryEvent, WorkerSnapshot } from "@/src/core/types";
+import type { AutomationEvent } from "@/src/automation/types";
 
 type ObservatoryEvents = {
   raw: TelemetryEvent[];
   exportProgress: TelemetryEvent;
+  dataCleared: { removed: number };
+  automation: AutomationEvent;
   snapshot: WorkerSnapshot;
   status: "connecting" | "live" | "paused" | "offline";
 };

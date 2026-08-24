@@ -26,7 +26,23 @@ export class TelemetryPipeline {
       // memory as a page hydrates).
       const progress = events.filter((event) => event.name === "site-export-progress");
       if (progress.length) observatoryBus.emit("exportProgress", progress[progress.length - 1]);
-      const telemetry = events.filter((event) => event.name !== "site-export-progress");
+      const dataCleared = events.find((event) => event.name === "execution-data-cleared");
+      if (dataCleared) observatoryBus.emit("dataCleared", { removed: Number(dataCleared.payload.removed ?? 0) });
+      const automation = events.filter((event) => event.name.startsWith("automation-"));
+      for (const event of automation) {
+        observatoryBus.emit("automation", {
+          name: event.name,
+          payload: event.payload,
+          timestamp: event.timestamp,
+          duration: event.duration,
+          status: event.status,
+        });
+      }
+      const telemetry = events.filter((event) =>
+        event.name !== "site-export-progress" &&
+        event.name !== "execution-data-cleared" &&
+        !event.name.startsWith("automation-"),
+      );
       if (!telemetry.length) return;
       this.queue.push(...telemetry);
       observatoryBus.emit("raw", telemetry);

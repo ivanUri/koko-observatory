@@ -17,6 +17,7 @@ interface ExecutionState {
   activeExecutionId?: string;
   hydrated: boolean;
   ingest: (events: TelemetryEvent[]) => void;
+  clear: () => void;
   hydrate: () => Promise<void>;
   select: (executionId?: string) => void;
   bookmark: (event?: TelemetryEvent) => void;
@@ -28,6 +29,7 @@ export const useExecutionStore = create<ExecutionState>((set, get) => ({
   checkpoints: [],
   branches: [],
   hydrated: false,
+  clear: () => set({ executions: [], checkpoints: [], branches: [], activeExecutionId: undefined }),
   ingest: (events) => {
     if (!events.length) return;
     const incoming = new Map<string, ExecutionRecord>();

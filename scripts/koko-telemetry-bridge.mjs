@@ -1,15 +1,16 @@
 import { watch } from "node:fs";
 import { createHash } from "node:crypto";
-import { mkdir, open, readFile, readdir, stat, writeFile } from "node:fs/promises";
+import { mkdir, open, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 import { WebSocketServer, WebSocket } from "ws";
 
-const workspaceRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
-const kokoDataRoot = resolve(workspaceRoot, "koko-core");
+const workspaceRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const kokoDataRoot = process.env.KOKO_DATA_ROOT ? resolve(process.env.KOKO_DATA_ROOT) : resolve(workspaceRoot, "../koko-core");
 const executionRoot = resolve(kokoDataRoot, ".koko-user-data/observatory-executions");
 const port = Number(process.env.KOKO_TELEMETRY_PORT ?? 9223);
+const automationPort = Number(process.env.KOKO_AUTOMATION_MCP_PORT ?? 9224);
 const clients = new Set();
 const kokoBinary = process.env.KOKO_BINARY ?? resolve(kokoDataRoot, "zig-out/bin/koko");
 await Promise.all([
@@ -22,6 +23,9 @@ let inspectionSequence = await latestExecutionSequence();
 let activeInspection = null;
 const executions = new Map();
 let lifecycleSequence = Date.now();
+let automationSession = null;
+let automationRpcSequence = 0;
+let automationQueue = Promise.resolve();
 
 const DEFAULT_RUN_OPTIONS = Object.freeze({
   // The UI observes lifecycle milestones instead of making the user choose a
@@ -52,6 +56,32 @@ server.on("connection", (socket) => {
       const command = JSON.parse(raw.toString());
       if (command?.type === "execution.replay") {
         queueReplay(command);
+        return;
+      }
+      if (command?.type === "execution.clear-all") {
+        inspections = inspections.then(async () => {
+          await drain();
+          await stopAutomationSession();
+          const removed = await clearExecutionArtifacts();
+          broadcastEvent({
+            id: `bridge:execution-data-cleared:${Date.now()}`,
+            sessionId: "bridge",
+            sequence: ++lifecycleSequence,
+            timestamp: Date.now(),
+            duration: 0,
+            kind: "log",
+            name: "execution-data-cleared",
+            status: "ok",
+            payload: { removed, source: "koko-observatory" },
+          });
+        }).catch((error) => console.error("Koko execution data cleanup failed:", error));
+        return;
+      }
+      if (typeof command?.type === "string" && command.type.startsWith("automation.")) {
+        automationQueue = automationQueue.then(() => handleAutomationCommand(command)).catch((error) => {
+          console.error("Koko automation command failed:", error);
+          emitAutomationEvent("automation-step-failed", "error", { error: error instanceof Error ? error.message : String(error) });
+        });
         return;
       }
       if (command?.type !== "inspect-url" || typeof command.url !== "string") return;
@@ -155,6 +185,302 @@ async function latestExecutionSequence() {
     const match = /^(?:inspection|replay)-(\d+)$/.exec(entry.name);
     return match ? Math.max(latest, Number(match[1])) : latest;
   }, 0);
+}
+
+async function clearExecutionArtifacts() {
+  const entries = await readdir(executionRoot, { withFileTypes: true }).catch(() => []);
+  let removed = 0;
+  for (const entry of entries) {
+    if (!entry.isDirectory() || (activeInspection && entry.name === activeInspection.id)) continue;
+    await rm(resolve(executionRoot, entry.name), { recursive: true, force: true });
+    removed += 1;
+  }
+  executions.clear();
+  return removed;
+}
+
+async function handleAutomationCommand(command) {
+  switch (command.type) {
+    case "automation.start":
+      return startAutomationSession(command);
+    case "automation.stop":
+      return stopAutomationSession();
+    case "automation.discover":
+      return discoverAutomationSession();
+    case "automation.execute":
+    case "automation.retry":
+      return executeAutomationStep(command.step);
+    case "automation.run":
+      return runAutomationWorkflow(command.steps);
+    case "automation.reset":
+      await stopAutomationSession();
+      return;
+    default:
+      throw new Error(`Unsupported automation command: ${command.type}`);
+  }
+}
+
+async function startAutomationSession(command) {
+  if (automationSession) await stopAutomationSession();
+  const id = `automation-${Date.now()}`;
+  const dataDirectory = resolve(executionRoot, id, "browser-data");
+  await mkdir(dataDirectory, { recursive: true });
+  const child = spawn(kokoBinary, [
+    "mcp", "--host", "127.0.0.1", "--port", String(automationPort), "--max-sessions", "1",
+    "--user-data-dir", dataDirectory,
+  ], { cwd: kokoDataRoot, env: process.env, stdio: ["ignore", "pipe", "inherit"] });
+  child.stdout?.on("data", (chunk) => console.log(`[koko-automation] ${chunk.toString("utf8").trim()}`));
+  try {
+    await waitForAutomationServer(child);
+    const initialized = await automationRpc({
+      jsonrpc: "2.0", id: ++automationRpcSequence, method: "initialize",
+      params: {
+        protocolVersion: "2024-11-05",
+        capabilities: {},
+        clientInfo: { name: "koko-observatory", version: "0.1.0" },
+      },
+    });
+    await automationRpc({ jsonrpc: "2.0", method: "notifications/initialized", params: {} }, initialized.sessionId);
+    automationSession = { id, child, dataDirectory, sessionId: initialized.sessionId, url: "", title: "" };
+    emitAutomationEvent("automation-session-started", "ok", { sessionId: id, ...(await automationSnapshot()) });
+    if (typeof command.url === "string" && command.url.trim()) {
+      await automationCall("goto", { url: command.url.trim(), waitUntil: command.waitUntil ?? "domcontentloaded", timeout: command.timeoutMs ?? 30_000 });
+      const state = await automationSnapshot();
+      automationSession.url = state.url;
+      automationSession.title = state.title;
+      emitAutomationEvent("automation-discovery-ready", "ok", { sessionId: id, ...state });
+    }
+  } catch (error) {
+    if (!child.killed) child.kill("SIGTERM");
+    throw error;
+  }
+}
+
+async function stopAutomationSession() {
+  const session = automationSession;
+  if (!session) return;
+  automationSession = null;
+  try {
+    await automationRpc(undefined, session.sessionId, "DELETE");
+  } catch {
+    // The Core process may already have exited; continue cleanup below.
+  }
+  if (!session.child.killed) session.child.kill("SIGTERM");
+  if (session.child.exitCode === null) {
+    await Promise.race([
+      new Promise((resolvePromise) => session.child.once("close", resolvePromise)),
+      new Promise((resolvePromise) => setTimeout(resolvePromise, 2_000)),
+    ]);
+  }
+  emitAutomationEvent("automation-session-stopped", "ok", { sessionId: session.id });
+}
+
+async function discoverAutomationSession() {
+  ensureAutomationSession();
+  const state = await automationSnapshot();
+  automationSession.url = state.url;
+  automationSession.title = state.title;
+  emitAutomationEvent("automation-discovery-ready", "ok", { sessionId: automationSession.id, ...state });
+}
+
+async function executeAutomationStep(step) {
+  ensureAutomationSession();
+  if (!step || typeof step.action !== "string") throw new Error("Automation step is missing an action");
+  const startedAt = Date.now();
+  const safeStep = sanitizeAutomationStep(step);
+  emitAutomationEvent("automation-step-started", "ok", { sessionId: automationSession.id, stepId: step.id, step: safeStep });
+  let marker;
+  try {
+    const args = await automationArguments(step);
+    marker = args._automationMarker;
+    const toolArguments = { ...args };
+    delete toolArguments._automationMarker;
+    await automationCall(actionToolName(step.action), toolArguments);
+    const state = await automationSnapshot();
+    automationSession.url = state.url;
+    automationSession.title = state.title;
+    emitAutomationEvent("automation-step-completed", "ok", {
+      sessionId: automationSession.id,
+      stepId: step.id,
+      step: safeStep,
+      durationMs: Date.now() - startedAt,
+      ...state,
+    });
+  } catch (error) {
+    emitAutomationEvent("automation-step-failed", "error", {
+      sessionId: automationSession.id,
+      stepId: step.id,
+      step: safeStep,
+      durationMs: Date.now() - startedAt,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    throw error;
+  } finally {
+    if (marker) await cleanupAutomationMarker(marker);
+  }
+}
+
+async function runAutomationWorkflow(steps) {
+  ensureAutomationSession();
+  if (!Array.isArray(steps)) throw new Error("Automation workflow steps must be an array");
+  for (const step of steps) await executeAutomationStep(step);
+  emitAutomationEvent("automation-workflow-completed", "ok", { sessionId: automationSession.id, count: steps.length, url: automationSession.url, title: automationSession.title });
+}
+
+function actionToolName(action) {
+  const name = ({ navigate: "goto", click: "click", fill: "fill", select: "selectOption", check: "setChecked", press: "press", hover: "hover", scroll: "scroll", wait: "waitForSelector" })[action];
+  if (!name) throw new Error(`Unsupported automation action: ${action}`);
+  return name;
+}
+
+async function automationArguments(step) {
+  if (step.action === "navigate") return { url: String(step.value ?? ""), waitUntil: step.waitUntil ?? "domcontentloaded", timeout: step.timeoutMs ?? 30_000 };
+  if (step.action === "wait") return { selector: locatorToSelector(step.locator), timeout: step.timeoutMs ?? 5_000 };
+  if (step.action === "scroll") return {
+    ...(step.x !== undefined ? { x: step.x } : {}),
+    ...(step.y !== undefined ? { y: step.y } : {}),
+    ...(step.locator ? await resolveAutomationLocator(step.locator) : {}),
+  };
+  const resolved = await resolveAutomationLocator(step.locator);
+  if (step.action === "fill") return { ...resolved, text: String(step.value ?? "") };
+  if (step.action === "select") return { ...resolved, value: String(step.value ?? "") };
+  if (step.action === "check") return { ...resolved, checked: step.checked === true };
+  if (step.action === "press") return { ...resolved, key: String(step.key ?? "Enter") };
+  return resolved;
+}
+
+async function resolveAutomationLocator(locator) {
+  if (!locator || typeof locator.kind !== "string" || typeof locator.value !== "string" || !locator.value.trim()) throw new Error("Action requires an element locator");
+  const elements = await automationInteractiveElements();
+  let matches = elements.filter((element) => matchesLocator(element, locator));
+  if (locator.kind === "css" && !matches.length) matches = await resolveCssLocator(locator.value);
+  if (!matches.length) throw new Error(`No element matched ${locator.kind}: ${locator.value}`);
+  if (matches.length > 1) throw new Error(`Locator matched ${matches.length} elements; make it more specific`);
+  if (!matches[0].backendNodeId) throw new Error("Matched element has no active backend node id");
+  return { backendNodeId: matches[0].backendNodeId, ...(matches[0]._automationMarker ? { _automationMarker: matches[0]._automationMarker } : {}) };
+}
+
+function matchesLocator(element, locator) {
+  const value = locator.value.trim().toLowerCase();
+  if (locator.kind === "role") return String(element.role ?? "").toLowerCase() === value && (!locator.name || String(element.name ?? "").toLowerCase().includes(locator.name.toLowerCase()));
+  if (locator.kind === "id") return element.id === locator.value;
+  if (locator.kind === "name") return element.elementName === locator.value;
+  if (locator.kind === "placeholder") return element.placeholder === locator.value;
+  return false;
+}
+
+async function resolveCssLocator(selector) {
+  // Use a temporary id so arbitrary CSS selectors can be resolved through the
+  // existing interactiveElements MCP tool without exposing Evaluate in UI.
+  const marker = `__koko_automation_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const script = `(() => { const nodes = [...document.querySelectorAll(${JSON.stringify(selector)})]; nodes.forEach((el, index) => el.setAttribute("id", ${JSON.stringify(marker)} + "_" + index)); return JSON.stringify({ count: nodes.length }); })()`;
+  const result = await automationCall("evaluate", { script });
+  let count = 0;
+  try { count = JSON.parse(extractToolText(result) || "{}").count ?? 0; } catch { /* keep no match */ }
+  if (count > 1) {
+    await cleanupAutomationMarker(marker);
+    throw new Error(`Locator matched ${count} elements; make it more specific`);
+  }
+  if (!count) {
+    await cleanupAutomationMarker(marker);
+    return [];
+  }
+  const refreshed = await automationInteractiveElements();
+  return refreshed.filter((element) => element.id === `${marker}_0`).map((element) => ({ ...element, _automationMarker: marker }));
+}
+
+async function cleanupAutomationMarker(marker) {
+  try {
+    await automationCall("evaluate", { script: `(() => { document.querySelectorAll("[id^=${JSON.stringify(marker)}]").forEach((el) => el.removeAttribute("id")); return true; })()` });
+  } catch {
+    // Cleanup is best effort; navigation may have already replaced the DOM.
+  }
+}
+
+function escapeCssIdentifier(value) {
+  return String(value).replace(/[^a-zA-Z0-9_-]/g, (character) => `\\${character}`);
+}
+
+function locatorToSelector(locator) {
+  if (!locator) throw new Error("Wait action requires a locator");
+  if (locator.kind === "css") return locator.value;
+  if (locator.kind === "id") return `#${escapeCssIdentifier(locator.value)}`;
+  if (locator.kind === "placeholder") return `[placeholder=${JSON.stringify(locator.value)}]`;
+  if (locator.kind === "name") return `[name=${JSON.stringify(locator.value)}]`;
+  throw new Error("Wait action supports CSS, id, name or placeholder locators");
+}
+
+async function automationSnapshot() {
+  const elements = await automationInteractiveElements();
+  const semantic = await automationCall("semantic_tree", {});
+  const meta = await automationCall("evaluate", { script: "JSON.stringify({url: location.href, title: document.title})" });
+  let parsedMeta = {};
+  try { parsedMeta = JSON.parse(extractToolText(meta) || "{}"); } catch { /* keep empty metadata */ }
+  return { url: parsedMeta.url ?? automationSession?.url ?? "", title: parsedMeta.title ?? "", elements, snapshot: extractToolText(semantic) ?? "" };
+}
+
+async function automationInteractiveElements() {
+  const result = await automationCall("interactiveElements", {});
+  try { return JSON.parse(extractToolText(result) || "[]"); } catch { return []; }
+}
+
+function sanitizeAutomationStep(step) {
+  const copy = { ...step };
+  if (copy.action === "fill" && typeof copy.value === "string") copy.value = copy.value.length ? `${copy.value.slice(0, 2)}•••` : "";
+  return copy;
+}
+
+function ensureAutomationSession() {
+  if (!automationSession) throw new Error("Automation session is not running");
+}
+
+async function waitForAutomationServer(child) {
+  const deadline = Date.now() + 15_000;
+  while (Date.now() < deadline) {
+    if (child.exitCode !== null) throw new Error(`Automation Core exited with code ${child.exitCode}`);
+    try {
+      await fetch(`http://127.0.0.1:${automationPort}/mcp`);
+      return;
+    } catch {
+      await new Promise((resolvePromise) => setTimeout(resolvePromise, 100));
+    }
+  }
+  child.kill("SIGTERM");
+  throw new Error("Timed out waiting for Koko MCP automation server");
+}
+
+async function automationRpc(body, sessionId, method = "POST") {
+  const response = await fetch(`http://127.0.0.1:${automationPort}/mcp`, {
+    method,
+    headers: { ...(method === "POST" ? { "content-type": "application/json" } : {}), ...(sessionId ? { "Mcp-Session-Id": sessionId } : {}) },
+    ...(body ? { body: JSON.stringify(body) } : {}),
+  });
+  const assignedSessionId = response.headers.get("mcp-session-id") ?? sessionId;
+  if (response.status === 204) return { sessionId: assignedSessionId, result: undefined };
+  const raw = await response.text();
+  let parsed;
+  try { parsed = JSON.parse(raw); } catch { throw new Error(`MCP returned invalid JSON (${response.status})`); }
+  if (!response.ok || parsed.error) throw new Error(parsed.error?.message ?? `MCP request failed (${response.status})`);
+  return { sessionId: assignedSessionId, result: parsed.result };
+}
+
+async function automationCall(name, args) {
+  ensureAutomationSession();
+  const response = await automationRpc({ jsonrpc: "2.0", id: ++automationRpcSequence, method: "tools/call", params: { name, arguments: args } }, automationSession.sessionId);
+  automationSession.sessionId = response.sessionId;
+  if (response.result?.isError === true) throw new Error(extractToolText(response.result) ?? `Koko action failed: ${name}`);
+  return response.result;
+}
+
+function extractToolText(result) {
+  const content = result?.content;
+  const text = Array.isArray(content) ? content.find((item) => item.type === "text")?.text : undefined;
+  return typeof text === "string" ? text : undefined;
+}
+
+function emitAutomationEvent(name, status, payload = {}, duration = 0) {
+  const timestamp = Date.now();
+  broadcastEvent({ id: `automation:${name}:${timestamp}:${Math.random().toString(36).slice(2, 7)}`, sessionId: automationSession?.id ?? "automation", sequence: ++lifecycleSequence, timestamp, duration, kind: "log", name, status, payload: { ...payload, source: "koko-observatory" } });
 }
 
 async function beginTelemetry(execution) {
