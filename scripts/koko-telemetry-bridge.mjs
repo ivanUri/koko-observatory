@@ -5,6 +5,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 import { WebSocketServer, WebSocket } from "ws";
+import { selectDocumentResponse } from "../src/core/document-transfer.ts";
 
 const workspaceRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const kokoDataRoot = process.env.KOKO_DATA_ROOT ? resolve(process.env.KOKO_DATA_ROOT) : resolve(workspaceRoot, "../koko-core");
@@ -97,7 +98,7 @@ server.on("connection", (socket) => {
       // separate processes never append to the same JSONL file concurrently.
       inspections = inspections.then(async () => {
         await drain();
-        const options = normalizeRunOptions(command.options);
+        const options = withKnownSiteReadinessWait(requestedUrl, normalizeRunOptions(command.options));
         activeInspection = createExecution("inspection", requestedUrl.href, undefined, options);
         await beginTelemetry(activeInspection);
         emitInspectionState("started");
@@ -520,6 +521,32 @@ function normalizeRunOptions(raw) {
   };
 }
 
+// Some sites do their real navigation after DOMContentLoaded. Zalo is one of
+// those sites: chat.zalo.me first renders a loading shell, calls its bootstrap
+// APIs and then redirects unauthenticated users to id.zalo.me/account. A short
+// background observation window must not decide when the export snapshot is
+// taken, otherwise Observatory persists only that shell. Keep this narrowly
+// scoped and let an explicit user wait condition win.
+const ZALO_READINESS_WAIT_SCRIPT = `(() => {
+  const loginBody = document.querySelector(".zLogin-layout .body");
+  if (loginBody) return loginBody.children.length > 0;
+  if (location.hostname !== "chat.zalo.me") return false;
+  const app = document.querySelector("#app");
+  return Boolean(app && app.children.length > 0 && !app.querySelector("#loading-page"));
+})()`;
+
+function withKnownSiteReadinessWait(url, options) {
+  if (options.waitSelector || options.waitScript || url.hostname !== "chat.zalo.me") return options;
+  return {
+    ...options,
+    // The default is already 30 seconds; preserve a smaller user value only
+    // when they supplied an explicit selector/script, handled above. Zalo's
+    // auth bootstrap can legitimately need the full readiness timeout.
+    waitMs: Math.max(options.waitMs, 30_000),
+    waitScript: ZALO_READINESS_WAIT_SCRIPT,
+  };
+}
+
 function resolveLocalPath(value) {
   if (value.startsWith("~/")) return resolve(process.env.HOME ?? kokoDataRoot, value.slice(2));
   return resolve(kokoDataRoot, value);
@@ -599,7 +626,8 @@ function runCoreInspection(url, replay, options = activeInspection?.options ?? D
 
 function emitSiteExport(markdown, finalHtml = "") {
   if (!activeInspection) return;
-  const documentEvent = documentResponseEvent();
+  const inspection = activeInspection;
+  const documentEvent = documentResponseEvent(inspection);
   const payload = documentEvent?.payload ?? {};
   const contentType = typeof payload.contentType === "string" ? payload.contentType : "text/html";
   const responseBody = typeof payload.responseBody === "string" ? payload.responseBody : "";
@@ -613,7 +641,7 @@ function emitSiteExport(markdown, finalHtml = "") {
   const body = htmlResponse ? "" : responseBody;
   const markdownText = htmlResponse && typeof markdown === "string" ? markdown : "";
   const siteExport = {
-    url: typeof payload.url === "string" ? payload.url : activeInspection.requestedUrl,
+    url: typeof payload.url === "string" ? payload.url : inspection.requestedUrl,
     status: typeof payload.responseStatus === "number" ? payload.responseStatus : null,
     contentType,
     html,
@@ -629,19 +657,14 @@ function emitSiteExport(markdown, finalHtml = "") {
     sourceEventId: documentEvent?.id ?? null,
     complete: true,
   };
-  const event = siteExportEvent("site-export-ready", siteExport);
-  activeInspection.events.push(event);
+  const event = siteExportEvent("site-export-ready", siteExport, inspection);
+  inspection.events.push(event);
   broadcastEvent(event);
 }
 
-function documentResponseEvent() {
-  if (!activeInspection) return undefined;
-  return [...activeInspection.events].reverse().find((event) => {
-    const payload = event?.payload ?? {};
-    if (event?.kind !== "network" || payload.journeyStage !== "response") return false;
-    if (payload.bodyCaptureState !== "captured" || typeof payload.responseBody !== "string") return false;
-    return payload.resourceType === "document" || String(payload.contentType ?? "").toLowerCase().includes("html");
-  });
+function documentResponseEvent(inspection = activeInspection) {
+  if (!inspection) return undefined;
+  return selectDocumentResponse(inspection.events, inspection.requestedUrl);
 }
 
 function isHtmlResponse(contentType, body = "") {
@@ -651,10 +674,11 @@ function isHtmlResponse(contentType, body = "") {
   return /^\s*(?:<!doctype\s+html|<html\b)/i.test(body);
 }
 
-function siteExportEvent(name, siteExport) {
+function siteExportEvent(name, siteExport, inspection = activeInspection) {
+  if (!inspection) return undefined;
   return {
-    id: `${activeInspection.id}:${name}:${Date.now()}`,
-    sessionId: activeInspection.id,
+    id: `${inspection.id}:${name}:${Date.now()}`,
+    sessionId: inspection.id,
     sequence: ++lifecycleSequence,
     timestamp: Date.now(),
     duration: 0,
@@ -662,9 +686,9 @@ function siteExportEvent(name, siteExport) {
     name,
     status: siteExport.htmlCaptured || siteExport.bodyCaptured || siteExport.markdownCaptured ? "ok" : "warning",
     payload: {
-      executionId: activeInspection.id,
-      inspectionId: activeInspection.id,
-      requestedUrl: activeInspection.requestedUrl,
+      executionId: inspection.id,
+      inspectionId: inspection.id,
+      requestedUrl: inspection.requestedUrl,
       siteExport,
       source: "koko-core",
     },
@@ -672,8 +696,9 @@ function siteExportEvent(name, siteExport) {
 }
 
 async function drainSiteExportProgress() {
-  if (!activeInspection) return;
-  const htmlFile = resolve(activeInspection.optionsDirectory, "site.html");
+  const inspection = activeInspection;
+  if (!inspection) return;
+  const htmlFile = resolve(inspection.optionsDirectory, "site.html");
   let info;
   let html = "";
   try {
@@ -689,7 +714,11 @@ async function drainSiteExportProgress() {
       html = "";
     }
   }
-  const documentEvent = documentResponseEvent();
+  // The inspection can finish while the file read above is in flight. Never
+  // publish progress for a completed inspection or read from a replacement
+  // inspection that started after this function began.
+  if (activeInspection !== inspection) return;
+  const documentEvent = documentResponseEvent(inspection);
   const payload = documentEvent?.payload ?? {};
   const contentType = typeof payload.contentType === "string" ? payload.contentType : "text/html";
   const responseBody = typeof payload.responseBody === "string" ? payload.responseBody : "";
@@ -705,10 +734,10 @@ async function drainSiteExportProgress() {
   // document bytes changed; mtime alone would make the UI repaint every tick.
   const contentHash = createHash("sha1").update(html).update(body).digest("hex");
   const key = `${documentEvent?.id ?? "none"}:${contentHash}`;
-  if (key === activeInspection.lastExportProgressKey) return;
-  activeInspection.lastExportProgressKey = key;
+  if (key === inspection.lastExportProgressKey) return;
+  inspection.lastExportProgressKey = key;
   const siteExport = {
-    url: typeof payload.url === "string" ? payload.url : activeInspection.requestedUrl,
+    url: typeof payload.url === "string" ? payload.url : inspection.requestedUrl,
     status: typeof payload.responseStatus === "number" ? payload.responseStatus : null,
     contentType,
     html: htmlResponse ? html : "",
@@ -727,7 +756,8 @@ async function drainSiteExportProgress() {
   // Progress artifacts are broadcast live but are intentionally not appended
   // to activeInspection.events: replay policy and the durable event history
   // should not retain every full HTML snapshot.
-  broadcastEvent(siteExportEvent("site-export-progress", siteExport));
+  const event = siteExportEvent("site-export-progress", siteExport, inspection);
+  if (event) broadcastEvent(event);
 }
 
 function queueReplay(command) {

@@ -7,6 +7,7 @@ export class TelemetryPipeline {
   private unsubscribe?: () => void;
   private queue: TelemetryEvent[] = [];
   private frame?: number;
+  private generation = 0;
 
   constructor(private readonly transport: Transport) {}
 
@@ -15,8 +16,15 @@ export class TelemetryPipeline {
     this.worker = new Worker(new URL("../workers/telemetry.worker.ts", import.meta.url), {
       type: "module",
     });
-    this.worker.onmessage = ({ data }: MessageEvent<WorkerSnapshot>) => {
-      observatoryBus.emit("snapshot", data);
+    this.worker.onmessage = ({ data }: MessageEvent<WorkerSnapshot & { generation?: number }>) => {
+      if (data.generation !== this.generation) return;
+      observatoryBus.emit("snapshot", {
+        events: data.events,
+        graphNodes: data.graphNodes,
+        graphEdges: data.graphEdges,
+        rates: data.rates,
+        p95: data.p95,
+      });
     };
     this.unsubscribe = this.transport.subscribe((payload) => {
       const events = this.parse(payload);
@@ -27,7 +35,14 @@ export class TelemetryPipeline {
       const progress = events.filter((event) => event.name === "site-export-progress");
       if (progress.length) observatoryBus.emit("exportProgress", progress[progress.length - 1]);
       const dataCleared = events.find((event) => event.name === "execution-data-cleared");
-      if (dataCleared) observatoryBus.emit("dataCleared", { removed: Number(dataCleared.payload.removed ?? 0) });
+      if (dataCleared) {
+        // Drop the worker ring before UI listeners run, and do not keep any
+        // events that shared this payload. A later snapshot must not restore
+        // graph nodes or P95 from the cleared inspection.
+        this.clearWorker();
+        observatoryBus.emit("dataCleared", { removed: Number(dataCleared.payload.removed ?? 0) });
+        return;
+      }
       const automation = events.filter((event) => event.name.startsWith("automation-"));
       for (const event of automation) {
         observatoryBus.emit("automation", {
@@ -53,6 +68,16 @@ export class TelemetryPipeline {
   }
   send(payload: string) { this.transport.send?.(payload); }
 
+  clearWorker() {
+    this.generation += 1;
+    this.queue = [];
+    if (this.frame != null) {
+      cancelAnimationFrame(this.frame);
+      this.frame = undefined;
+    }
+    this.worker?.postMessage({ type: "clear", generation: this.generation });
+  }
+
   stop() {
     this.unsubscribe?.();
     this.transport.close();
@@ -73,7 +98,7 @@ export class TelemetryPipeline {
     if (this.frame) return;
     this.frame = requestAnimationFrame(() => {
       const batch = this.queue.splice(0, 2_000);
-      this.worker?.postMessage({ type: "append", batch });
+      this.worker?.postMessage({ type: "append", batch, generation: this.generation });
       this.frame = undefined;
       if (this.queue.length) this.scheduleFlush();
     });

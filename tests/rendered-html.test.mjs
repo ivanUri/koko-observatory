@@ -46,7 +46,7 @@ test("Overview derives operational metrics from telemetry", async () => {
     readFile(new URL("../src/workers/telemetry.worker.ts", import.meta.url), "utf8"),
     readFile(new URL("../scripts/koko-telemetry-bridge.mjs", import.meta.url), "utf8"),
   ]);
-  assert.match(panels, /latestNumber\(events/);
+  assert.match(panels, /latestSample/);
   assert.match(panels, /percentile\(/);
   assert.match(panels, /Latest inspection/);
   assert.match(panels, /isMeasuredEvent/);
@@ -125,7 +125,7 @@ test("Internet Journey does not present missing measurements as zero millisecond
   assert.match(panel, /return "Not timed"/);
   assert.match(panel, /return "Boundary"/);
   assert.match(panel, /return "Reused"/);
-  assert.match(store, /event\.duration > 0 \? "measured" : "unavailable"/);
+  assert.match(store, /isMeasuredEvent\(event\)/);
   assert.match(sink, /\.measurement = "boundary"/);
   assert.match(sink, /timing\.num_connects == 0 and timing\.connection_id >= 0/);
   assert.match(sink, /durationMeasurement\("tcp", 0, "measured", true\)/);

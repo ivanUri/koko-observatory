@@ -1,0 +1,82 @@
+/* Typography for Internet Journey only. The shared journey styles remain
+ * compact for other pages and canvas views. */
+.internetPage :global(.journey-header > div:first-child > span) {
+  font-size: 10px;
+}
+
+.internetPage :global(.journey-header p) {
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.internetPage :global(.journey-mode button),
+.internetPage :global(.journey-playback button) {
+  font-size: 11px;
+}
+
+.internetPage :global(.journey-legend span) {
+  font-size: 10px;
+}
+
+.internetPage :global(.journey-toolbar input) {
+  font-size: 11px;
+}
+
+.internetPage :global(.journey-node__summary strong) {
+  font-size: 12px;
+}
+
+.internetPage :global(.journey-node__summary small) {
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.internetPage :global(.journey-node__duration) {
+  font-size: 10px;
+}
+
+.internetPage :global(.journey-node__details) {
+  font-size: 11px;
+}
+
+.internetPage :global(.journey-kv small) {
+  font-size: 10px;
+}
+
+.internetPage :global(.journey-kv code),
+.internetPage :global(.journey-node__details pre) {
+  font-size: 10px;
+}
+
+.internetPage :global(.journey-node__details h4) {
+  font-size: 12px;
+}
+
+.internetPage :global(.journey-node__details p) {
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.internetPage :global(.journey-waterfall header),
+.internetPage :global(.journey-waterfall small),
+.internetPage :global(.journey-waterfall b) {
+  font-size: 10px;
+}
+
+.internetPage :global(.journey-boundary strong) {
+  font-size: 12px;
+}
+
+.internetPage :global(.journey-boundary span),
+.internetPage :global(.journey-boundary button) {
+  font-size: 11px;
+}
+
+.internetPage :global(.journey-empty strong) {
+  font-size: 13px;
+}
+
+.internetPage :global(.journey-empty span) {
+  font-size: 11px;
+  line-height: 1.55;
+}

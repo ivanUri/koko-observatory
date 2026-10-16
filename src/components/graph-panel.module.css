@@ -1,0 +1,86 @@
+/* Typography for Graph only. The graph has a denser data surface than the
+ * dashboard, so keep this scale local to the graph page. */
+.graphPage :global(.graph-mode-note) {
+  font-size: 10px;
+}
+
+.graphPage :global(.graph-summary .metric-top) {
+  font-size: 10px;
+}
+
+.graphPage :global(.graph-summary .metric-card .delta) {
+  font-size: 11px;
+}
+
+.graphPage :global(.graph-view-tabs button),
+.graphPage :global(.graph-filters--inline > label),
+.graphPage :global(.graph-filters--inline > button) {
+  font-size: 10px;
+}
+
+.graphPage :global(.graph-filters--inline .search-input),
+.graphPage :global(.graph-filters--inline .select-control) {
+  font-size: 11px;
+}
+
+.graphPage :global(.graph-mode-context) {
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.graphPage :global(.graph-mode-context strong) {
+  font-size: 13px;
+}
+
+.graphPage :global(.card-header h2) {
+  font-size: 13px;
+}
+
+.graphPage :global(.card-header p) {
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.graphPage :global(.graph-empty strong) {
+  font-size: 13px;
+}
+
+.graphPage :global(.graph-empty span) {
+  font-size: 11px;
+}
+
+.graphPage :global(.graph-node > header strong) {
+  font-size: 11px;
+}
+
+.graphPage :global(.graph-node > header small),
+.graphPage :global(.graph-node > header > b),
+.graphPage :global(.graph-node__context span),
+.graphPage :global(.graph-node__facts small) {
+  font-size: 10px;
+}
+
+.graphPage :global(.graph-node__facts code) {
+  font-size: 9px;
+}
+
+.graphPage :global(.graph-event-detail h3) {
+  font-size: 13px;
+}
+
+.graphPage :global(.graph-event-detail dt),
+.graphPage :global(.graph-event-detail dd),
+.graphPage :global(.graph-quality span),
+.graphPage :global(.graph-roots > span) {
+  font-size: 10px;
+}
+
+.graphPage :global(.graph-event-detail dd) {
+  line-height: 1.45;
+}
+
+.graphPage :global(.graph-quality strong),
+.graphPage :global(.graph-roots b),
+.graphPage :global(.graph-roots small) {
+  font-size: 9px;
+}

@@ -7,6 +7,7 @@ import { ChevronDown, ChevronLeft, ChevronRight, Circle, CircleHelp, Globe2, Pau
 import { internetJourneyEdges, internetJourneyNodes } from "./data";
 import { useInternetJourneyStore } from "./store";
 import type { JourneyNode } from "./types";
+import styles from "./internet-journey-panel.module.css";
 
 const typeIcons: Record<JourneyNode["type"], string> = {
   url: "URL", dns: "DNS", connection: "TCP", tls: "TLS", http: "HTTP",
@@ -21,6 +22,7 @@ export function journeyDurationLabel(model: JourneyNode): string {
   if (model.status === "skipped") return "Skipped";
   if (model.status === "unavailable" || model.metadata.measurement === "unavailable") return "Unavailable";
   if (model.metadata.measurement === "reused") return "Reused";
+  if (["cached", "derived", "estimated", "not-applicable", "not-applicable-replay"].includes(String(model.metadata.measurement ?? ""))) return String(model.metadata.measurement);
   if (model.metadata.measurement === "not-timed") return "Not timed";
   if (model.metadata.measurement === "boundary") return "Boundary";
   return `${model.metadata.estimated ? "~" : ""}${model.duration.toFixed(3)} ms`;
@@ -179,16 +181,17 @@ export function InternetJourneyPanel() {
     ["DNS", journeyNodes.find((node) => node.id === "dns")],
     ["TCP", journeyNodes.find((node) => node.id === "tcp")],
     ["TLS", journeyNodes.find((node) => node.id === "tls")],
+    ["Request", journeyNodes.find((node) => node.id === "request")],
     ["Server", journeyNodes.find((node) => node.id === "server")],
     ["Transfer", journeyNodes.find((node) => node.id === "response")],
   ] as const, [journeyNodes]);
-  const totalDuration = durations.reduce((total, [, node]) => total + (node?.status === "skipped" ? 0 : node?.duration ?? 0), 0);
+  const totalDuration = durations.reduce((total, [, node]) => total + (node?.status === "complete" && node.metadata.measurement === "measured" ? node.duration : 0), 0);
   const failedNode = journeyNodes.find((node) => node.status === "error");
   const onNodeDragStop = useCallback((_: unknown, node: { id: string; position: { x: number; y: number } }) => {
     positions.current[node.id] = node.position;
   }, []);
 
-  return <main className="internet-journey">
+  return <main className={`internet-journey ${styles.internetPage}`}>
     <header className="journey-header">
       <div><span><Globe2 size={14} /> Protocol learning module</span><h1>Internet Journey</h1><p>From URL input to the moment the browser receives an HTTP response.</p></div>
       <div className="journey-mode"><button className={mode === "education" ? "active" : ""} onClick={() => setMode("education")}>Educational</button><button className={mode === "developer" ? "active" : ""} onClick={() => setMode("developer")}>Developer</button></div>
@@ -210,7 +213,7 @@ export function InternetJourneyPanel() {
     </section>
     <section className="journey-waterfall">
       <header><strong>Request waterfall</strong><span>Total <b>{totalDuration ? `${totalDuration.toFixed(3)} ms` : "Awaiting telemetry"}</b></span></header>
-      <div>{durations.map(([label, node]) => { const value = node?.duration ?? 0; const result = node?.status === "error" ? "Failed" : node?.status === "skipped" ? "Skipped" : value ? `${value.toFixed(3)} ms` : node?.status === "unavailable" ? "Unavailable" : "—"; return <span key={label} className={`journey-waterfall__row journey-waterfall__row--${node?.status ?? "pending"}`}><small>{label}</small><i style={{ width: `${totalDuration && value ? Math.max(2, value / totalDuration * 100) : 2}%` }} /><b>{result}</b></span>; })}</div>
+      <div>{durations.map(([label, node]) => { const measured = node?.status === "complete" && node.metadata.measurement === "measured"; const value = measured ? node.duration : 0; const result = node?.status === "error" ? "Failed" : node?.status === "skipped" ? "Skipped" : node?.status === "unavailable" || node?.metadata.measurement === "unavailable" ? "Unavailable" : measured ? `${value.toFixed(3)} ms` : node?.metadata.measurement === "boundary" ? "Boundary" : "—"; return <span key={label} className={`journey-waterfall__row journey-waterfall__row--${node?.status ?? "pending"}`}><small>{label}</small><i style={{ width: `${totalDuration && value ? Math.max(2, value / totalDuration * 100) : 2}%` }} /><b>{result}</b></span>; })}</div>
     </section>
     {phase === "error" && <footer className="journey-boundary journey-boundary--error"><strong>Journey stopped at {failedNode?.title ?? "an unknown stage"}.</strong><span>{failedNode?.id === "url-input" ? "The URL is invalid, so the request was not sent." : `Previous stages completed, but ${failedNode?.title ?? "the network operation"} failed. Later stages were not reached.`} Open the failed node for diagnostics.</span></footer>}
     {phase === "received" && revealedCount >= journeyNodes.length && <footer className="journey-boundary"><strong>Response received.</strong><span>Internet Journey stops here — no HTML, CSS, JavaScript, DOM, rendering, Event Loop or GPU processing.</span><button onClick={() => { window.location.href = "/browser-journey"; }}>Continue → Browser Journey</button></footer>}

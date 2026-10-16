@@ -5,7 +5,7 @@ import { useMemo, useState } from "react";
 import { Activity, Cpu, Database, Files, Gauge, MemoryStick, Monitor, Network, Route, Server, Waypoints } from "lucide-react";
 import type { TelemetryEvent } from "@/src/core/types";
 import { useTelemetryStore } from "@/src/stores";
-import { isMeasuredEvent } from "@/src/core/metrics";
+import { isolatedSystemDuration } from "@/src/core/metrics";
 
 type StageKey = "browser-processes" | "thread-scheduler" | "cpu" | "memory" | "file-system" | "socket-layer" | "ipc" | "graphics-pipeline" | "gpu" | "display";
 type Explorer = "processes" | "threads" | "memory" | "io" | "graphics" | "signals";
@@ -50,10 +50,10 @@ export function SystemJourneyPanel() {
     <section className="system-metrics" aria-label="Live system metrics">
       <SystemMetric label="Processes" value={model.processes.length ? String(model.processes.length) : "Unavailable"} detail="Unique observed process identities" />
       <SystemMetric label="Threads" value={model.threads.length ? String(model.threads.length) : "Unavailable"} detail="Unique observed execution threads" />
-      <SystemMetric label="CPU capacity" value={numberValue(model.latest.cpuPercent, "%")} detail={cpuDetail(model.latest.cpuCoresUsed, model.latest.cpuSampleWindowMs, model.latest.logicalCpuCount, model.latest.contextSwitches)} />
+      <SystemMetric label="CPU capacity" value={numberValue(model.latest.cpuPercent, "%")} detail={cpuDetail(model.latest.cpuCoresUsed, model.latest.cpuSampleWindowMs, model.latest.cpuSampleState, model.latest.logicalCpuCount, model.latest.contextSwitches)} />
       <SystemMetric label="Resident RAM" value={formatBytes(model.latest.residentMemoryBytes)} detail={model.latest.physicalMemoryBytes == null ? "Host capacity unavailable" : `${formatBytes(model.latest.physicalMemoryBytes)} host physical memory`} />
       <SystemMetric label="Disk I/O" value={formatBytes((model.latest.diskReadBytes ?? 0) + (model.latest.diskWriteBytes ?? 0), model.hasDisk)} detail={`${formatBytes(model.latest.diskReadBytes)} read · ${formatBytes(model.latest.diskWriteBytes)} write`} />
-      <SystemMetric label="Presented frames" value={model.frames.length ? String(model.frames.length) : "Unavailable"} detail={model.frames.length ? `Latest boundary ${formatDuration(model.frames.at(-1)?.duration)}` : "No frame/present boundary emitted"} />
+      <SystemMetric label="Presented frames" value={model.frames.length ? String(model.frames.length) : "Unavailable"} detail={model.frames.length ? `Latest presentation ${formatDuration(model.frames.at(-1)?.duration)}` : "No present event emitted"} />
     </section>
 
     <div className="system-layout">
@@ -65,14 +65,14 @@ export function SystemJourneyPanel() {
             <p><strong>Ownership.</strong> {stage.owner}</p>
             <div className="system-stage__facts"><Fact label="Events" value={String(stage.events.length)} /><Fact label="Accumulated duration" value={stage.events.length ? formatDuration(stage.duration) : "Unavailable"} /><Fact label="Latest process" value={payloadText(stage.latest, "processName", "processId")} /><Fact label="Latest thread" value={payloadText(stage.latest, "threadName", "threadId")} /><Fact label="Measurement" value={stage.measurement} /><Fact label="Last observed" value={stage.latest ? formatClock(stage.latest.timestamp) : "Unavailable"} /></div>
             <div className="system-stage__evidence"><div><strong>Observed typed signals</strong>{stage.evidence.length ? <ul>{stage.evidence.map((item) => <li key={item}>{item}</li>)}</ul> : <p>No typed signal has reached this subsystem.</p>}</div><div><strong>Core telemetry still needed</strong><ul>{stage.missing.map((item) => <li key={item}>{item}</li>)}</ul></div></div>
-            {stage.events.length > 0 && <div className="system-stage__event-list">{stage.events.slice(-4).reverse().map((event) => <div key={event.id}><code>#{event.sequence}</code><span>{event.name}</span><small>{formatDuration(event.duration)} · {event.status} · {formatClock(event.timestamp)}</small></div>)}</div>}
+            {stage.events.length > 0 && <div className="system-stage__event-list">{stage.events.slice(-4).reverse().map((event) => <div key={event.id}><code>#{event.sequence}</code><span>{event.name}</span><small>{event.payload.systemMeasurementState === "boundary" ? "boundary" : formatDuration(isolatedSystemDuration(event) || undefined)} · {event.status} · {formatClock(event.timestamp)}</small></div>)}</div>}
           </div>
         </details>)}</div>
       </section>
 
       <aside className="system-side">
         <section className="system-card"><header><div><span>HARDWARE TOPOLOGY</span><h2>Observed execution hardware</h2></div></header><div className="hardware-path">{model.hardware.map((item, index) => <div key={item.name}><i>{index + 1}</i><span><strong>{item.name}</strong><small className={item.available ? "" : "unavailable-text"}>{item.value}</small></span>{index < model.hardware.length - 1 && <b>↓</b>}</div>)}</div></section>
-        <section className="system-card"><header><div><span>RESOURCE COUNTERS</span><h2>Latest process sample</h2></div><small>Cumulative unless noted</small></header><div className="resource-summary"><SystemRow label="Resident memory" value={formatBytes(model.latest.residentMemoryBytes)} /><SystemRow label="CPU capacity" value={numberValue(model.latest.cpuPercent, "%")} /><SystemRow label="CPU window" value={model.latest.cpuSampleWindowMs == null ? "Warming up" : `${model.latest.cpuSampleWindowMs.toFixed(0)} ms`} /><SystemRow label="Context switches" value={integerValue(model.latest.contextSwitches)} /><SystemRow label="Disk read" value={formatBytes(model.latest.diskReadBytes)} /><SystemRow label="Disk write" value={formatBytes(model.latest.diskWriteBytes)} /><SystemRow label="Network received" value={model.networkReceived ? formatBytes(model.networkReceived) : "Unavailable"} /><SystemRow label="Connections" value={model.connections.size ? String(model.connections.size) : "Unavailable"} /></div></section>
+        <section className="system-card"><header><div><span>RESOURCE COUNTERS</span><h2>Latest process sample</h2></div><small>{model.latestSample ? `${formatClock(model.latestSample.timestamp)} · ${model.latestSampleState ?? "sampled"}` : "No coherent sample"}</small></header><div className="resource-summary"><SystemRow label="Resident memory" value={formatBytes(model.latest.residentMemoryBytes)} /><SystemRow label="CPU capacity" value={numberValue(model.latest.cpuPercent, "%")} /><SystemRow label="CPU sample" value={model.latest.cpuSampleWindowMs == null ? "Warming up" : `${model.latest.cpuSampleWindowMs.toFixed(0)} ms · ${model.latestSampleState ?? "unknown"}`} /><SystemRow label="Context switches" value={integerValue(model.latest.contextSwitches)} /><SystemRow label="Disk read" value={formatBytes(model.latest.diskReadBytes)} /><SystemRow label="Disk write" value={formatBytes(model.latest.diskWriteBytes)} /><SystemRow label="Network received" value={model.networkReceived == null ? "Unavailable" : formatBytes(model.networkReceived)} /><SystemRow label="Connections" value={model.connections.size ? String(model.connections.size) : "Unavailable"} /></div></section>
       </aside>
     </div>
 
@@ -85,11 +85,23 @@ export function SystemJourneyPanel() {
 }
 
 function buildSystemModel(events: TelemetryEvent[]) {
-  const systemEvents = events.filter((event) => typeof event.payload.systemStage === "string" || hasAny(event, ["processId", "threadId", "residentMemoryBytes", "cpuPercent", "contextSwitches", "diskReadBytes", "diskWriteBytes"]));
-  const latest = latestNumbers(systemEvents, ["cpuPercent", "cpuCoresUsed", "cpuSampleWindowMs", "logicalCpuCount", "contextSwitches", "residentMemoryBytes", "physicalMemoryBytes", "diskReadBytes", "diskWriteBytes", "gpuPercent", "gpuMemoryBytes", "refreshRateHz"]);
+  const latestSessionId = events.at(-1)?.sessionId;
+  const scopedEvents = latestSessionId ? events.filter((event) => event.sessionId === latestSessionId) : events;
+  const systemEvents = scopedEvents.filter((event) => typeof event.payload.systemStage === "string" || hasAny(event, ["processId", "threadId", "residentMemoryBytes", "cpuPercent", "contextSwitches", "diskReadBytes", "diskWriteBytes"]));
+  const sampleKeys = ["cpuPercent", "cpuCoresUsed", "cpuSampleWindowMs", "logicalCpuCount", "contextSwitches", "residentMemoryBytes", "physicalMemoryBytes", "diskReadBytes", "diskWriteBytes", "gpuPercent", "gpuMemoryBytes", "refreshRateHz"];
+  const latestSample = [...systemEvents].reverse().find((event) => hasAny(event, sampleKeys));
+  const latest = latestNumbers(latestSample ? [latestSample] : [], sampleKeys);
   const stageModels = stages.map((stage) => observeStage(stage, systemEvents));
-  const frames = events.filter((event) => ["frame", "present"].includes(String(event.payload.browserStage ?? event.name)) || event.payload.presentedFrameId != null);
-  const connections = uniqueValues(events, ["connectionId", "primaryIp"]);
+  const frameIds = new Set<string>();
+  const frames = scopedEvents.filter((event) => {
+    const stage = String(event.payload.browserStage ?? event.name);
+    if (stage !== "present" && event.payload.presentedFrameId == null) return false;
+    const id = String(event.payload.presentedFrameId ?? event.id);
+    if (frameIds.has(id)) return false;
+    frameIds.add(id);
+    return true;
+  });
+  const connections = uniqueValues(scopedEvents, ["connectionId", "primaryIp"]);
   return {
     systemEvents, latest, stageModels, frames, connections,
     hardware: [
@@ -106,10 +118,11 @@ function buildSystemModel(events: TelemetryEvent[]) {
     measuredCount: stageModels.filter((stage) => stage.state === "measured").length,
     boundaryCount: stageModels.filter((stage) => stage.state === "boundary").length,
     errorCount: systemEvents.filter((event) => event.status === "error").length,
-    sessionCount: new Set(events.map((event) => event.sessionId)).size,
-    firstSequence: events.at(0)?.sequence, lastSequence: events.at(-1)?.sequence,
-    networkReceived: receivedNetworkBytes(events),
-    networkSent: sumAliases(events, ["sentBytes", "requestBytes"]),
+    sessionCount: new Set(scopedEvents.map((event) => event.sessionId)).size,
+    firstSequence: scopedEvents.at(0)?.sequence, lastSequence: scopedEvents.at(-1)?.sequence,
+    latestSample, latestSampleState: typeof latestSample?.payload.cpuSampleState === "string" ? latestSample.payload.cpuSampleState : undefined,
+    networkReceived: receivedNetworkBytes(scopedEvents),
+    networkSent: sumAliases(scopedEvents, ["sentBytes", "requestBytes"]),
     hasDisk: latest.diskReadBytes != null || latest.diskWriteBytes != null,
     memorySamples: systemEvents.filter((event) => typeof event.payload.residentMemoryBytes === "number"),
   };
@@ -119,34 +132,88 @@ type SystemModel = ReturnType<typeof buildSystemModel>;
 type StageModel = ReturnType<typeof observeStage>;
 
 function observeStage(stage: (typeof stages)[number], systemEvents: TelemetryEvent[]) {
-  const direct = systemEvents.filter((event) => event.payload.systemStage === stage.key);
+  const direct = systemEvents.filter((event) => stageSignalPresent(event, stage.key));
+  const owned = direct.filter((event) => stageOwnsTiming(event, stage.key));
   const stageEvents = direct;
   const evidence = stage.fields.flatMap((field) => {
     const event = [...stageEvents].reverse().find((candidate) => candidate.payload[field] != null);
     return event ? [`${field}: ${formatPayloadValue(event.payload[field])}`] : [];
   });
   const latest = stageEvents.at(-1);
-  const state = stageEvents.some((event) => event.status === "error") ? "error" : stageEvents.some(isMeasuredEvent) ? "measured" : direct.length ? "boundary" : "missing";
-  const duration = direct.reduce((sum, event) => sum + event.duration, 0);
-  return { ...stage, events: stageEvents, latest, evidence, state, duration, label: state === "measured" ? "MEASURED" : state === "boundary" ? "BOUNDARY" : state === "error" ? "ERROR" : "NOT INSTRUMENTED", measure: direct.length ? formatDuration(duration) : "Unavailable", measurement: latest ? String(latest.payload.measurementState ?? (state === "measured" ? "sampled" : "boundary")) : "Unavailable" };
+  const state = owned.some((event) => event.status === "error") ? "error" : direct.some((event) => stageHasSampledSignal(event, stage.key)) ? "measured" : direct.length ? "boundary" : "missing";
+  const timed = owned.filter((event) => isolatedSystemDuration(event) > 0);
+  const duration = timed.reduce((sum, event) => sum + event.duration, 0);
+  return { ...stage, events: stageEvents, latest, evidence, state, duration, label: state === "measured" ? "SAMPLED" : state === "boundary" ? "BOUNDARY" : state === "error" ? "ERROR" : "NOT INSTRUMENTED", measure: timed.length ? formatDuration(duration) : direct.length ? "No isolated timing" : "Unavailable", measurement: latest ? String(latest.payload.systemMeasurementState ?? (state === "measured" ? "sampled counter" : "boundary")) : "Unavailable" };
+}
+
+function stageSignalPresent(event: TelemetryEvent, key: StageKey) {
+  if (event.payload.systemStage === key) return true;
+  const fields: Record<StageKey, string[]> = {
+    "browser-processes": ["processId", "processName"],
+    "thread-scheduler": ["threadId", "threadName"],
+    cpu: ["cpuPercent", "cpuCoresUsed", "logicalCpuCount", "contextSwitches"],
+    memory: ["residentMemoryBytes", "physicalMemoryBytes", "jsHeapBytes"],
+    "file-system": ["diskReadBytes", "diskWriteBytes"],
+    "socket-layer": ["connectionId", "primaryIp", "requestBytes", "responseBodyBytes", "httpVersion"],
+    ipc: ["ipcMessageId", "ipcChannel", "ipcBytes"],
+    "graphics-pipeline": ["displayListBytes", "paintCommands", "layerCount"],
+    gpu: ["gpuPercent", "gpuMemoryBytes", "gpuDurationMs"],
+    display: ["refreshRateHz", "presentedFrameId", "vsyncTimestamp"],
+  };
+  return hasAny(event, fields[key]);
+}
+
+function stageOwnsTiming(event: TelemetryEvent, key: StageKey) {
+  if (event.payload.systemMeasurementState === "boundary") return false;
+  if (typeof event.payload.systemStage === "string") return event.payload.systemStage === key;
+  return stageSignalPresent(event, key);
+}
+
+function stageHasSampledSignal(event: TelemetryEvent, key: StageKey) {
+  if (event.payload.systemMeasurementState === "boundary") return false;
+  if (!stageOwnsTiming(event, key)) return false;
+  return event.payload.systemMeasurementState === "measured" || hasNumericSample(event, key);
+}
+
+function hasNumericSample(event: TelemetryEvent, key: StageKey) {
+  const samples: Partial<Record<StageKey, string[]>> = {
+    cpu: ["cpuPercent", "cpuCoresUsed"],
+    memory: ["residentMemoryBytes", "physicalMemoryBytes", "jsHeapBytes"],
+    "file-system": ["diskReadBytes", "diskWriteBytes"],
+    "thread-scheduler": ["contextSwitches"],
+    gpu: ["gpuPercent", "gpuMemoryBytes", "gpuDurationMs"],
+    display: ["refreshRateHz"],
+    "socket-layer": ["requestBytes", "responseBodyBytes"],
+    "graphics-pipeline": ["displayListBytes", "paintCommands", "layerCount"],
+    ipc: ["ipcBytes"],
+  };
+  return hasAny(event, samples[key] ?? []);
 }
 
 function aggregateEntities(events: TelemetryEvent[], kind: "process" | "thread") {
-  const rows = new Map<string, { id: string; name: string; events: number; first: number; last: number; duration: number; statuses: Set<string> }>();
+  const rows = new Map<string, { id: string; name: string; events: number; first: number; last: number; duration: number; measured: boolean; statuses: Set<string> }>();
   for (const event of events) {
     const id = event.payload[`${kind}Id`];
     const name = event.payload[`${kind}Name`] ?? event.payload[kind];
     if (id == null && name == null) continue;
     const key = String(id ?? name);
-    const row = rows.get(key) ?? { id: key, name: String(name ?? "Unnamed"), events: 0, first: event.timestamp, last: event.timestamp, duration: 0, statuses: new Set<string>() };
-    row.events += 1; row.last = event.timestamp; row.duration += event.duration; row.statuses.add(event.status); rows.set(key, row);
+    const row = rows.get(key) ?? { id: key, name: String(name ?? "Unnamed"), events: 0, first: event.timestamp, last: event.timestamp, duration: 0, measured: false, statuses: new Set<string>() };
+    row.events += 1;
+    row.last = event.timestamp;
+    const duration = isolatedSystemDuration(event);
+    if (event.payload.systemMeasurementState === "measured") {
+      row.measured = true;
+      row.duration += duration;
+    }
+    row.statuses.add(event.status);
+    rows.set(key, row);
   }
   return [...rows.values()];
 }
 
 function EntityTable({ kind, rows }: { kind: "process" | "thread"; rows: SystemModel["processes"] }) {
   if (!rows.length) return <Empty title={`No ${kind} identity observed`} detail={`Core must emit ${kind}Id and ${kind}Name to populate this explorer.`} />;
-  return <div className="system-table-wrap"><table className="system-table"><thead><tr><th>{kind === "process" ? "PID" : "TID"}</th><th>Name</th><th>Events</th><th>Observed duration</th><th>First seen</th><th>Last seen</th><th>Status</th></tr></thead><tbody>{rows.map((row) => <tr key={row.id}><td><code>{row.id}</code></td><td>{row.name}</td><td>{row.events}</td><td>{formatDuration(row.duration)}</td><td>{formatClock(row.first)}</td><td>{formatClock(row.last)}</td><td>{[...row.statuses].join(", ")}</td></tr>)}</tbody></table></div>;
+  return <div className="system-table-wrap"><table className="system-table"><thead><tr><th>{kind === "process" ? "PID" : "TID"}</th><th>Name</th><th>Events</th><th>Observed duration</th><th>First seen</th><th>Last seen</th><th>Status</th></tr></thead><tbody>{rows.map((row) => <tr key={row.id}><td><code>{row.id}</code></td><td>{row.name}</td><td>{row.events}</td><td>{row.measured ? formatDuration(row.duration) : "Unavailable"}</td><td>{formatClock(row.first)}</td><td>{formatClock(row.last)}</td><td>{[...row.statuses].join(", ")}</td></tr>)}</tbody></table></div>;
 }
 
 function MemoryExplorer({ model }: { model: SystemModel }) {
@@ -156,7 +223,7 @@ function MemoryExplorer({ model }: { model: SystemModel }) {
   return <div className="system-samples"><div className="system-samples__summary"><Fact label="Latest RSS" value={formatBytes(model.latest.residentMemoryBytes)} /><Fact label="Host physical" value={formatBytes(model.latest.physicalMemoryBytes)} /><Fact label="Samples shown" value={String(samples.length)} /></div><div className="system-sparkbars" aria-label="Recent resident memory samples">{samples.map((event) => <div key={event.id} style={{ height: `${Math.max(5, Number(event.payload.residentMemoryBytes) / max * 100)}%` }} title={`${formatClock(event.timestamp)} · ${formatBytes(Number(event.payload.residentMemoryBytes))}`} />)}</div><p>RSS is a process high-water/current value supplied by the platform sampler; it is not the JavaScript heap and it is not attributed to individual resources.</p></div>;
 }
 
-function IoExplorer({ model }: { model: SystemModel }) { return <div className="system-diagnostic-grid"><Fact label="Cumulative disk read" value={formatBytes(model.latest.diskReadBytes)} /><Fact label="Cumulative disk write" value={formatBytes(model.latest.diskWriteBytes)} /><Fact label="Response bytes observed" value={model.networkReceived ? formatBytes(model.networkReceived) : "Unavailable"} /><Fact label="Request bytes observed" value={model.networkSent ? formatBytes(model.networkSent) : "Unavailable"} /><Fact label="Connection identities" value={model.connections.size ? [...model.connections].slice(0, 5).join(", ") : "Unavailable"} /><Fact label="Missing for device view" value="Packets, retransmits, NIC, per-operation file data" /></div>; }
+function IoExplorer({ model }: { model: SystemModel }) { return <div className="system-diagnostic-grid"><Fact label="Cumulative disk read" value={formatBytes(model.latest.diskReadBytes)} /><Fact label="Cumulative disk write" value={formatBytes(model.latest.diskWriteBytes)} /><Fact label="Response bytes observed" value={model.networkReceived == null ? "Unavailable" : formatBytes(model.networkReceived)} /><Fact label="Request bytes observed" value={model.networkSent == null ? "Unavailable" : formatBytes(model.networkSent)} /><Fact label="Connection identities" value={model.connections.size ? [...model.connections].slice(0, 5).join(", ") : "Unavailable"} /><Fact label="Missing for device view" value="Packets, retransmits, NIC, per-operation file data" /></div>; }
 function GraphicsExplorer({ model }: { model: SystemModel }) { const graphics = model.stageModels.filter((stage) => ["graphics-pipeline", "gpu", "display"].includes(stage.key)); return <div className="system-graphics">{graphics.map((stage) => <article key={stage.key}><span className={`system-stage__state system-stage__state--${stage.state}`}>{stage.label}</span><strong>{stage.name}</strong><small>{stage.events.length} events · {stage.events.length ? formatDuration(stage.duration) : "no timing"}</small><p>{stage.evidence.join(" · ") || `Core still needs ${stage.missing.join(", ")}.`}</p></article>)}</div>; }
 function SignalCoverage({ models }: { models: StageModel[] }) { return <div className="system-table-wrap"><table className="system-table"><thead><tr><th>Subsystem</th><th>Coverage</th><th>Available evidence</th><th>Required next signals</th></tr></thead><tbody>{models.map((stage) => <tr key={stage.key}><td>{stage.name}</td><td><span className={`system-stage__state system-stage__state--${stage.state}`}>{stage.label}</span></td><td>{stage.evidence.join(" · ") || "Boundary only / none"}</td><td>{stage.missing.join(", ")}</td></tr>)}</tbody></table></div>; }
 function Empty({ title, detail }: { title: string; detail: string }) { return <div className="system-empty"><Activity size={20}/><strong>{title}</strong><span>{detail}</span></div>; }
@@ -165,10 +232,10 @@ function SystemMetric({ label, value, detail }: { label: string; value: string; 
 function SystemRow({ label, value }: { label: string; value: string }) { return <div><span>{label}</span><strong className={value === "Unavailable" ? "unavailable" : ""}>{value}</strong></div>; }
 function Fact({ label, value }: { label: string; value: string }) { return <div className="system-fact"><small>{label}</small><strong>{value}</strong></div>; }
 
-function latestNumbers(events: TelemetryEvent[], keys: string[]) { const result: Record<string, number | undefined> = {}; for (const key of keys) { for (let index = events.length - 1; index >= 0; index--) { const value = events[index].payload[key]; if (typeof value === "number" && Number.isFinite(value)) { result[key] = value; break; } } } return result; }
+function latestNumbers(events: TelemetryEvent[], keys: string[]) { const result: Record<string, number | undefined> = {}; const latest = events.at(-1); for (const key of keys) { const value = latest?.payload[key]; if (typeof value === "number" && Number.isFinite(value)) result[key] = value; } return result; }
 function hasAny(event: TelemetryEvent, keys: string[]) { return keys.some((key) => event.payload[key] != null); }
 function uniqueValues(events: TelemetryEvent[], keys: string[]) { const values = new Set<string>(); for (const event of events) for (const key of keys) { const value = event.payload[key]; if (value != null && value !== "") values.add(String(value)); } return values; }
-function sumAliases(events: TelemetryEvent[], keys: string[]) { return events.reduce((sum, event) => { for (const key of keys) { const value = event.payload[key]; if (typeof value === "number") return sum + value; } return sum; }, 0); }
+function sumAliases(events: TelemetryEvent[], keys: string[]) { const seen = new Set<string>(); let found = false; const total = events.reduce((sum, event) => { const identity = event.payload.requestId == null ? event.id : `${event.sessionId}:${String(event.payload.requestId)}`; if (seen.has(identity)) return sum; for (const key of keys) { const value = event.payload[key]; if (typeof value === "number" && Number.isFinite(value)) { seen.add(identity); found = true; return sum + value; } } return sum; }, 0); return found ? total : undefined; }
 function receivedNetworkBytes(events: TelemetryEvent[]) {
   const seen = new Set<string>();
   let total = 0;
@@ -180,13 +247,14 @@ function receivedNetworkBytes(events: TelemetryEvent[]) {
     const value = event.payload.responseBodyBytes ?? event.payload.receivedBytes;
     if (typeof value === "number" && Number.isFinite(value)) total += value;
   }
-  return total;
+  return seen.size ? total : undefined;
 }
-function cpuDetail(coresUsed: number | undefined, windowMs: number | undefined, logicalCpuCount: number | undefined, contextSwitches: number | undefined) {
+function cpuDetail(coresUsed: number | undefined, windowMs: number | undefined, sampleState: unknown, logicalCpuCount: number | undefined, contextSwitches: number | undefined) {
   if (logicalCpuCount == null) return "Logical CPU topology unavailable";
   const usage = coresUsed == null ? "CPU sample warming up" : `≈ ${coresUsed.toFixed(2)} logical core${coresUsed === 1 ? "" : "s"}`;
   const window = windowMs == null ? "" : ` · ${windowMs.toFixed(0)} ms window`;
-  return `${usage}${window} · ${logicalCpuCount} logical CPUs · cumulative ${integerValue(contextSwitches)} switches`;
+  const freshness = typeof sampleState === "string" ? ` · ${sampleState}` : "";
+  return `${usage}${window}${freshness} · ${logicalCpuCount} logical CPUs · cumulative ${integerValue(contextSwitches)} switches`;
 }
 function payloadText(event: TelemetryEvent | undefined, primary: string, fallback: string) { const value = event?.payload[primary] ?? event?.payload[fallback]; return value == null ? "Unavailable" : String(value); }
 function formatBytes(value?: number, available = value != null) { if (!available || value == null) return "Unavailable"; if (value >= 1_073_741_824) return `${(value / 1_073_741_824).toFixed(1)} GB`; if (value >= 1_048_576) return `${(value / 1_048_576).toFixed(1)} MB`; if (value >= 1024) return `${(value / 1024).toFixed(1)} KB`; return `${value.toFixed(0)} B`; }

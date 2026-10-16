@@ -79,6 +79,7 @@ interface TelemetryState {
   p95: number;
   status: "connecting" | "live" | "paused" | "offline";
   lastEventAt?: number;
+  seenEventIds: Set<string>;
   append: (events: TelemetryEvent[], rate: Array<[number, number]>, p95: number) => void;
   hydrate: (events: TelemetryEvent[], persistedTotal?: number) => void;
   setStatus: (status: TelemetryState["status"]) => void;
@@ -94,18 +95,37 @@ export const useTelemetryStore = create<TelemetryState>((set) => ({
   p95: 0,
   status: "offline",
   lastEventAt: undefined,
+  seenEventIds: new Set(),
   append: (events, rate, p95) =>
-    set((state) => ({
-      events: [...state.events, ...events].slice(-Math.min(state.retention, MAX_VISIBLE_EVENTS)),
-      total: state.total + events.length,
-      rate,
-      p95,
-      lastEventAt: events.length ? events[events.length - 1].timestamp : state.lastEventAt,
-    })),
+    set((state) => {
+      const seen = state.seenEventIds;
+      const unique: TelemetryEvent[] = [];
+      for (const event of events) {
+        if (seen.has(event.id)) continue;
+        seen.add(event.id);
+        unique.push(event);
+      }
+      if (seen.size > 50_000) {
+        const keep = [...seen].slice(-25_000);
+        seen.clear();
+        for (const id of keep) seen.add(id);
+      }
+      return {
+        events: [...state.events, ...unique].slice(-Math.min(state.retention, MAX_VISIBLE_EVENTS)),
+        total: state.total + unique.length,
+        rate,
+        p95,
+        lastEventAt: unique.length ? unique[unique.length - 1].timestamp : state.lastEventAt,
+      };
+    }),
   hydrate: (events, persistedTotal) => set((state) => {
     if (!events.length) return persistedTotal == null ? state : { ...state, total: Math.max(state.total, persistedTotal) };
-    const liveIds = new Set(state.events.map((event) => event.id));
-    const restored = events.filter((event) => !liveIds.has(event.id));
+    const seen = state.seenEventIds;
+    const restored = events.filter((event) => {
+      if (seen.has(event.id)) return false;
+      seen.add(event.id);
+      return true;
+    });
     const merged = [...restored, ...state.events]
       .sort((a, b) => a.timestamp - b.timestamp || a.sequence - b.sequence)
       .slice(-Math.min(state.retention, MAX_VISIBLE_EVENTS));
@@ -117,7 +137,7 @@ export const useTelemetryStore = create<TelemetryState>((set) => ({
   }),
   setStatus: (status) => set({ status }),
   setRetention: (retention) => set((state) => ({ retention, events: state.events.slice(-retention) })),
-  clear: () => set({ events: [], total: 0, rate: [], p95: 0, lastEventAt: undefined }),
+  clear: () => set({ events: [], total: 0, rate: [], p95: 0, lastEventAt: undefined, seenEventIds: new Set() }),
 }));
 
 // HTML progress snapshots are deliberately separate from telemetry retention:

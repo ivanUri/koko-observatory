@@ -31,13 +31,14 @@ export function ApplicationPanel() {
   const snapshotEvents = useMemo(() => originEvents.filter((event) => !sessionId || event.sessionId === sessionId), [originEvents, sessionId]);
   const snapshotSummary = useMemo(() => [...applicationEvents].reverse().find((event) => event.sessionId === sessionId && event.payload.storageType === "snapshot"), [applicationEvents, sessionId]);
   const rows = useMemo(() => latestRows(snapshotEvents), [snapshotEvents]);
+  const summaryDetails = useMemo(() => record(snapshotSummary?.payload.details), [snapshotSummary]);
   const selected = storageTabs.find((tab) => tab.id === active)!;
   const visibleRows = useMemo(() => rows
     .filter((row) => row.kind === active)
     .filter((row) => matches(row, query))
     .sort((left, right) => right.event.sequence - left.event.sequence), [active, query, rows]);
   const selectedRow = visibleRows.find((row) => row.identity === selectedIdentity) ?? visibleRows[0];
-  const metrics = useMemo(() => buildMetrics(rows), [rows]);
+  const metrics = useMemo(() => buildMetrics(rows, summaryDetails), [rows, summaryDetails]);
   const Icon = selected.icon;
   const cacheSupported = false;
 
@@ -49,9 +50,9 @@ export function ApplicationPanel() {
 
     <section className="metric-grid application-metrics">
       <Metric tab={storageTabs[0]} value={metrics.cookies} detail={`${metrics.secureCookies} Secure · ${metrics.httpOnlyCookies} HttpOnly`} active={active} onClick={setActive}/>
-      <Metric tab={storageTabs[1]} value={metrics.localStorage} detail={formatBytes(metrics.localBytes)} active={active} onClick={setActive}/>
-      <Metric tab={storageTabs[2]} value={metrics.sessionStorage} detail={formatBytes(metrics.sessionBytes)} active={active} onClick={setActive}/>
-      <Metric tab={storageTabs[3]} value={metrics.indexedDb} detail={`${metrics.idbRecords} records observed`} active={active} onClick={setActive}/>
+      <Metric tab={storageTabs[1]} value={metrics.localStorage} detail={`${formatBytes(metrics.localBytes)}${metrics.partial ? " · partial snapshot" : ""}`} active={active} onClick={setActive}/>
+      <Metric tab={storageTabs[2]} value={metrics.sessionStorage} detail={`${formatBytes(metrics.sessionBytes)}${metrics.partial ? " · partial snapshot" : ""}`} active={active} onClick={setActive}/>
+      <Metric tab={storageTabs[3]} value={metrics.indexedDb} detail={`${metrics.idbRecords} records${metrics.partial ? " · partial snapshot" : ""}`} active={active} onClick={setActive}/>
       <Metric tab={storageTabs[4]} value={cacheSupported ? "—" : "N/A"} detail={cacheSupported ? "Cache API snapshot" : "Core exporter unavailable"} active={active} onClick={setActive}/>
     </section>
 
@@ -61,7 +62,7 @@ export function ApplicationPanel() {
       {active === "cache-storage" ? <UnsupportedCacheStorage /> : visibleRows.length ? <div className="application-split"><StorageTable rows={visibleRows} selectedIdentity={selectedRow?.identity} onSelect={setSelectedIdentity}/><StorageDetails row={selectedRow}/></div> : <EmptyStorage kind={selected.label} icon={Icon} hasSnapshot={Boolean(sessionId)} />}
     </section>
 
-    {active === "cookies" && metrics.cookies > 0 && <section className="application-security"><ShieldAlert size={15}/><div><strong>Cookie posture</strong><span>{metrics.insecureCookies ? `${metrics.insecureCookies} cookie${metrics.insecureCookies === 1 ? "" : "s"} not marked Secure.` : "All observed cookies are marked Secure."} {metrics.nonHttpOnlyCookies ? `${metrics.nonHttpOnlyCookies} readable by page JavaScript.` : "All observed cookies are HttpOnly."}</span></div><LockKeyhole size={15}/></section>}
+    {active === "cookies" && metrics.cookies > 0 && <section className="application-security"><ShieldAlert size={15}/><div><strong>Cookie posture</strong><span>{metrics.partial ? `${metrics.secureCookies} of the retained cookie rows are marked Secure; full cookie posture is unavailable because the snapshot is partial.` : `${metrics.insecureCookies ? `${metrics.insecureCookies} cookie${metrics.insecureCookies === 1 ? "" : "s"} not marked Secure.` : "All observed cookies are marked Secure."} ${metrics.nonHttpOnlyCookies ? `${metrics.nonHttpOnlyCookies} readable by page JavaScript.` : "All observed cookies are HttpOnly."}`}</span></div><LockKeyhole size={15}/></section>}
   </main>;
 }
 
@@ -94,7 +95,7 @@ function EmptyStorage({ kind, icon: Icon, hasSnapshot }: { kind: string; icon: t
 function UnsupportedCacheStorage() { return <div className="application-empty application-empty--capability"><Box size={22}/><strong>Cache Storage exporter is not available</strong><span>Koko Core exposes the Cache API surface, but its current backing store does not retain cache names or entries for an inspection snapshot.</span><small>This state means “not instrumented”, not that the origin has no Cache Storage entries.</small></div>; }
 
 function latestRows(events: TelemetryEvent[]): StorageRow[] { const latest = new Map<string, StorageRow>(); for (const event of events) { const kind = storageKind(event.payload); if (!kind) continue; const details = record(event.payload.details); const identity = `${kind}:${String(event.payload.origin ?? "")}:${String(details.domain ?? "")}:${String(details.path ?? "")}:${String(event.payload.key ?? "")}`; const current = latest.get(identity); if (!current || current.event.sequence < event.sequence) latest.set(identity, { event, kind, details, identity }); } return [...latest.values()]; }
-function buildMetrics(rows: StorageRow[]) { const cookies = rows.filter((row) => row.kind === "cookies"); const local = rows.filter((row) => row.kind === "local-storage"); const session = rows.filter((row) => row.kind === "session-storage"); const idb = rows.filter((row) => row.kind === "indexed-db"); return { cookies: cookies.length, secureCookies: cookies.filter((row) => row.details.secure === true).length, httpOnlyCookies: cookies.filter((row) => row.details.httpOnly === true).length, insecureCookies: cookies.filter((row) => row.details.secure !== true).length, nonHttpOnlyCookies: cookies.filter((row) => row.details.httpOnly !== true).length, localStorage: local.length, localBytes: local.reduce((sum, row) => sum + (number(row.event.payload.valueBytes) ?? 0), 0), sessionStorage: session.length, sessionBytes: session.reduce((sum, row) => sum + (number(row.event.payload.valueBytes) ?? 0), 0), indexedDb: idb.length, idbRecords: idb.reduce((sum, row) => sum + (number(row.details.recordCount) ?? 0), 0) }; }
+function buildMetrics(rows: StorageRow[], summary: Record<string, unknown> = {}) { const cookies = rows.filter((row) => row.kind === "cookies"); const local = rows.filter((row) => row.kind === "local-storage"); const session = rows.filter((row) => row.kind === "session-storage"); const idb = rows.filter((row) => row.kind === "indexed-db"); const total = (key: string, fallback: number) => number(summary[key]) ?? fallback; return { cookies: total("cookies", cookies.length), secureCookies: cookies.filter((row) => row.details.secure === true).length, httpOnlyCookies: cookies.filter((row) => row.details.httpOnly === true).length, insecureCookies: cookies.filter((row) => row.details.secure !== true).length, nonHttpOnlyCookies: cookies.filter((row) => row.details.httpOnly !== true).length, localStorage: total("localStorage", local.length), localBytes: number(summary.localStorageBytes) ?? local.reduce((sum, row) => sum + (number(row.event.payload.valueBytes) ?? 0), 0), sessionStorage: total("sessionStorage", session.length), sessionBytes: number(summary.sessionStorageBytes) ?? session.reduce((sum, row) => sum + (number(row.event.payload.valueBytes) ?? 0), 0), indexedDb: total("indexedDb", idb.length), idbRecords: number(summary.indexedDbRecords) ?? idb.reduce((sum, row) => sum + (number(row.details.recordCount) ?? 0), 0), partial: summary.truncated === true }; }
 function matches(row: StorageRow, query: string) { return !query.trim() || `${row.event.payload.key ?? ""} ${row.event.payload.origin ?? ""} ${JSON.stringify(row.details)}`.toLowerCase().includes(query.toLowerCase()); }
 function record(value: unknown): Record<string, unknown> { return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {}; }
 function number(value: unknown) { return typeof value === "number" && Number.isFinite(value) ? value : undefined; }
@@ -103,7 +104,7 @@ function formatExpiry(value: unknown) { return typeof value === "number" ? new D
 function yesNo(value: unknown) { return value === true ? "Yes" : "No"; }
 function shortSession(value: string) { return value.length > 26 ? `${value.slice(0, 12)}…${value.slice(-8)}` : value; }
 function storageValue(event: TelemetryEvent) { return typeof event.payload.value === "string" ? event.payload.value : "redacted"; }
-function snapshotLabel(event: TelemetryEvent) { const details = record(event.payload.details); const count = number(details.emittedEntries) ?? 0; return count ? `${count} entries captured` : "snapshot captured · no entries"; }
+function snapshotLabel(event: TelemetryEvent) { const details = record(event.payload.details); const emitted = number(details.emittedEntries) ?? 0; const total = number(details.totalEntries) ?? ["cookies", "localStorage", "sessionStorage", "indexedDb"].reduce((sum, key) => sum + (number(details[key]) ?? 0), 0); if (details.truncated === true) return `${emitted} of ${total} entries captured · partial`; return emitted ? `${emitted} entries captured` : "snapshot captured · no entries"; }
 function inspectedOrigin(url: string) { try { return new URL(url).origin; } catch { return url || "No inspected origin"; } }
 function storageKind(payload: Record<string, unknown>): StorageKind | undefined { const value = payload.storageType ?? payload.storageKind ?? payload.applicationStorage; if (value === "cookies" || value === "cookie") return "cookies"; if (value === "local-storage" || value === "localStorage") return "local-storage"; if (value === "session-storage" || value === "sessionStorage") return "session-storage"; if (value === "indexed-db" || value === "indexedDB") return "indexed-db"; if (value === "cache-storage" || value === "cacheStorage") return "cache-storage"; return undefined; }
 function belongsToInspectedOrigin(event: TelemetryEvent, origin: string) { try { const target = new URL(origin); const kind = storageKind(event.payload); if (kind === "cookies") { const domain = String(record(event.payload.details).domain ?? event.payload.origin ?? "").replace(/^\./, "").toLowerCase(); const host = target.hostname.toLowerCase(); return Boolean(domain) && (host === domain || host.endsWith(`.${domain}`)); } return String(event.payload.origin ?? "") === target.origin; } catch { return false; } }

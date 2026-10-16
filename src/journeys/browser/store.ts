@@ -1,22 +1,44 @@
 import { create } from "zustand";
 import type { TelemetryEvent } from "@/src/core/types";
+import { isMeasuredEvent } from "@/src/core/metrics";
+import { lockDocumentRequest, matchesLockedDocument } from "@/src/core/document-transfer";
 import { browserJourneyNodes } from "./data";
 import type { BrowserJourneyNode } from "./types";
-import { buildTrace, type BrowserTrace } from "./trace-model";
+import { buildTrace, extendTrace, type BrowserTrace } from "./trace-model";
 
 const stageByKind: Partial<Record<TelemetryEvent["kind"], string>> = { dom: "dom", javascript: "javascript", scheduler: "event-loop", render: "paint", memory: "raster" };
+const traceEventIds = new Set<string>();
+
+function replaceTraceIds(events: TelemetryEvent[]) {
+  traceEventIds.clear();
+  for (const event of events) traceEventIds.add(event.id);
+}
 
 export const useBrowserJourneyStore = create<{
   nodes: BrowserJourneyNode[]; trace: BrowserTrace; cursor: number; playing: boolean; speed: .5 | 1 | 2; revealed: number;
-  phase: "idle" | "waiting" | "running" | "complete" | "blocked"; blockedReason?: string;
-  play: (value: boolean) => void; seek: (value: number) => void; setSpeed: (value: .5 | 1 | 2) => void; reveal: () => void; reset: () => void; block: (reason: string) => void; ingest: (events: TelemetryEvent[]) => void;
+  phase: "idle" | "waiting" | "running" | "complete" | "blocked"; blockedReason?: string; navigationRequestId?: string;
+  play: (value: boolean) => void; seek: (value: number) => void; setSpeed: (value: .5 | 1 | 2) => void; reveal: () => void; reset: () => void; clear: () => void; block: (reason: string) => void; ingest: (events: TelemetryEvent[]) => void;
 }>((set) => ({
-  nodes: browserJourneyNodes, trace: buildTrace([]), cursor: 0, playing: false, speed: 1, revealed: 0, phase: "idle", blockedReason: undefined,
+  nodes: browserJourneyNodes, trace: buildTrace([]), cursor: 0, playing: false, speed: 1, revealed: 0, phase: "idle", blockedReason: undefined, navigationRequestId: undefined,
   play: (playing) => set({ playing }), seek: (cursor) => set({ cursor: Math.max(0, Math.min(browserJourneyNodes.length - 1, cursor)) }),
   setSpeed: (speed) => set({ speed }), reveal: () => set((state) => ({ revealed: Math.min(browserJourneyNodes.length, state.revealed + 1) })),
-  reset: () => set({ nodes: browserJourneyNodes.map((item) => ({ ...item, metadata: {} })), trace: buildTrace([]), cursor: 0, playing: false, revealed: 0, phase: "waiting", blockedReason: undefined }),
+  reset: () => {
+    traceEventIds.clear();
+    set({ nodes: browserJourneyNodes.map((item) => ({ ...item, metadata: {} })), trace: buildTrace([]), cursor: 0, playing: false, revealed: 0, phase: "waiting", blockedReason: undefined, navigationRequestId: undefined });
+  },
+  clear: () => {
+    traceEventIds.clear();
+    set({ nodes: browserJourneyNodes.map((item) => ({ ...item, metadata: {} })), trace: buildTrace([]), cursor: 0, playing: false, revealed: 0, phase: "idle", blockedReason: undefined, navigationRequestId: undefined });
+  },
   block: (blockedReason) => set({ phase: "blocked", blockedReason, revealed: 0, playing: false }),
   ingest: (events) => set((state) => {
+    const fresh: TelemetryEvent[] = [];
+    for (const event of events) {
+      if (traceEventIds.has(event.id)) continue;
+      traceEventIds.add(event.id);
+      fresh.push(event);
+    }
+    if (!fresh.length) return state;
     const nodes = state.nodes.map((item) => ({ ...item, metadata: { ...item.metadata } }));
     const markBoundary = (id: string, source: string, metadata: Record<string, string | number> = {}) => {
       const item = nodes.find((candidate) => candidate.id === id);
@@ -27,14 +49,30 @@ export const useBrowserJourneyStore = create<{
     let phase = state.phase;
     let blockedReason = state.blockedReason;
     let revealed = state.revealed;
-    for (const event of events) {
+    let navigationRequestId = state.navigationRequestId;
+    for (const event of fresh) {
       const payload = event.payload as Record<string, unknown>;
-      if (event.kind === "network" && event.status === "error") {
-        const failedStage = typeof payload.failureStage === "string" ? payload.failureStage : typeof payload.journeyStage === "string" ? payload.journeyStage : "network request";
-        phase = "blocked";
-        blockedReason = `Internet Journey failed at ${failedStage}. No HTTP response entered the browser pipeline.`;
-        revealed = 0;
+      if (payload.inspectionState === "completed") {
+        // The reveal timer is only a presentation aid. Do not make the user
+        // wait through one animation tick per browser stage after Core has
+        // already declared the inspection complete.
+        phase = "complete";
+        revealed = nodes.length;
         continue;
+      }
+      if (event.kind === "network") {
+        navigationRequestId = lockDocumentRequest(payload, navigationRequestId);
+        // A failed image, beacon or XHR must not freeze the browser pipeline.
+        // Only the locked document navigation can do that, and only its
+        // response duration is attributed to the response node.
+        if (!matchesLockedDocument(payload, navigationRequestId)) continue;
+        if (event.status === "error") {
+          const failedStage = typeof payload.failureStage === "string" ? payload.failureStage : typeof payload.journeyStage === "string" ? payload.journeyStage : "network request";
+          phase = "blocked";
+          blockedReason = `Internet Journey failed at ${failedStage}. No HTTP response entered the browser pipeline.`;
+          revealed = 0;
+          continue;
+        }
       }
       if (phase === "blocked") continue;
       if (event.kind === "network" && payload.journeyStage === "received" && event.status === "ok") {
@@ -45,7 +83,14 @@ export const useBrowserJourneyStore = create<{
         (event.kind === "network" && (payload.journeyStage === "received" || payload.journeyStage === "response") ? "response" : stageByKind[event.kind]);
       const target = nodes.find((item) => item.id === stage);
       if (!target) continue;
-      target.duration += event.duration; target.timestamp = event.timestamp; target.status = event.status === "error" ? "error" : "complete";
+      const measuredDuration = isMeasuredEvent(event) ? event.duration : 0;
+      // The document emits a measured response stage and then a zero-duration
+      // received boundary. Keep the measured value. Do not add every
+      // subresource: those events never reach this node.
+      target.duration = event.kind === "network"
+        ? (measuredDuration > 0 ? measuredDuration : target.duration)
+        : target.duration + measuredDuration;
+      target.timestamp = event.timestamp; target.status = event.status === "error" ? "error" : "complete";
       target.metadata = { events: Number(target.metadata.events ?? 0) + 1, lastEvent: event.name, measurement: typeof payload.measurementState === "string" ? payload.measurementState : "Koko telemetry" };
       if (typeof payload.scriptUrl === "string") target.metadata.scriptUrl = payload.scriptUrl;
       if (typeof payload.scriptKind === "string") target.metadata.scriptKind = payload.scriptKind;
@@ -75,6 +120,8 @@ export const useBrowserJourneyStore = create<{
         phase = "complete";
       }
     }
-    return { nodes, phase, blockedReason, revealed, trace: buildTrace([...state.trace.events, ...events].slice(-50_000)) };
+    const trace = extendTrace(state.trace, fresh);
+    if (trace.events.length < traceEventIds.size) replaceTraceIds(trace.events);
+    return { nodes, phase, blockedReason, revealed, navigationRequestId, trace };
   }),
 }));

@@ -6,13 +6,13 @@
     "node": ">=22.13.0"
   },
   "scripts": {
-    "dev": "node scripts/start-live.mjs",
+    "dev": "node scripts/start-live.mjs --port 4000",
     "build": "vinext build",
-    "start": "vinext start",
+    "start": "vinext start --port 4000",
     "test": "npm run build && node --experimental-strip-types --test tests/*.test.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "db:generate": "drizzle-kit generate",
-    "telemetry:bridge": "node scripts/koko-telemetry-bridge.mjs"
+    "telemetry:bridge": "node --experimental-strip-types scripts/koko-telemetry-bridge.mjs"
   },
   "dependencies": {
     "@dagrejs/dagre": "^1.1.8",

@@ -7,6 +7,7 @@ import { useSelectionStore, useTelemetryStore, useUIStore } from "@/src/stores";
 import { executionIdFor } from "@/src/executions/types";
 import type { TelemetryEvent } from "@/src/core/types";
 import { isMeasuredEvent, metricCategory, percentile } from "@/src/core/metrics";
+import { groupNetworkTransfers } from "@/src/core/network-metrics";
 
 type InsightSeverity = "critical" | "warning" | "opportunity";
 type Insight = {
@@ -37,8 +38,12 @@ function buildInsights(events: TelemetryEvent[]): Insight[] {
   const byDuration = [...measuredEvents].sort((a, b) => b.duration - a.duration);
   const errors = events.filter((event) => event.status === "error");
   const warnings = events.filter((event) => event.status === "warning");
-  const slowRuntime = byDuration.filter((event) => ["javascript", "scheduler", "render"].includes(metricCategory(event) ?? "") && event.duration >= 50);
-  const slowNetwork = byDuration.filter((event) => metricCategory(event) === "network" && event.duration >= 400);
+  const slowRuntime = byDuration.filter((event) => ["javascript", "scheduler"].includes(metricCategory(event) ?? "") && event.duration >= 50);
+  const slowNetwork = groupNetworkTransfers(events).filter((request) => request.duration >= 400).sort((a, b) => b.duration - a.duration);
+  const slowNetworkEvidence = slowNetwork.flatMap((request) => {
+    const measured = [...request.events].reverse().find(isMeasuredEvent);
+    return measured ? [measured] : [];
+  });
   const repeated = new Map<string, TelemetryEvent[]>();
   for (const event of events) repeated.set(event.name, [...(repeated.get(event.name) ?? []), event]);
   const repeatedWarnings = [...repeated.entries()].filter(([, group]) => group.length >= 3 && group.some((event) => event.status !== "ok")).sort((a, b) => b[1].length - a[1].length)[0];
@@ -57,10 +62,10 @@ function buildInsights(events: TelemetryEvent[]): Insight[] {
     impact: `Up to ${slowRuntime[0].duration.toFixed(0)} ms blocking`, confidence: 91, evidence: slowRuntime.slice(0, 5),
   });
   if (slowNetwork.length) insights.push({
-    id: "slow-network", severity: slowNetwork.some((event) => event.duration >= 1_000) ? "critical" : "warning", category: "Network", title: "Slow responses extend the critical path",
-    summary: `${slowNetwork.length} network event${slowNetwork.length === 1 ? "" : "s"} took more than 400 ms. The slowest observed request completed in ${slowNetwork[0].duration.toFixed(1)} ms.`,
+    id: "slow-network", severity: slowNetwork.some((request) => request.duration >= 1_000) ? "critical" : "warning", category: "Network", title: "Slow transfers extend the critical path",
+    summary: `${slowNetwork.length} network transfer${slowNetwork.length === 1 ? "" : "s"} took more than 400 ms of measured stage time. The slowest transfer accumulated ${slowNetwork[0].duration.toFixed(1)} ms.`,
     recommendation: "Prioritize the slowest critical-path response. Check server timing, cacheability, payload size and whether it can be preloaded or requested later.",
-    impact: `${slowNetwork.length} slow network signal${slowNetwork.length === 1 ? "" : "s"}`, confidence: 88, evidence: slowNetwork.slice(0, 5),
+    impact: `${slowNetwork.length} slow network transfer${slowNetwork.length === 1 ? "" : "s"}`, confidence: 88, evidence: slowNetworkEvidence.slice(0, 5),
   });
   if (repeatedWarnings) insights.push({
     id: "repeated-signal", severity: "warning", category: "Runtime", title: `Repeated “${repeatedWarnings[0]}” signals`,
@@ -79,9 +84,9 @@ function buildInsights(events: TelemetryEvent[]): Insight[] {
     .sort((a, b) => b.duration - a.duration)[0];
   if (largestKind) insights.push({
     id: "dominant-work", severity: "opportunity", category: "Performance", title: `${largestKind.kind} dominates measured work`,
-    summary: `${largestKind.kind} accounts for ${largestKind.duration.toFixed(1)} ms of accumulated event duration in the active telemetry buffer.`,
+    summary: `${largestKind.kind} accounts for ${largestKind.duration.toFixed(1)} ms of accumulated measured duration in the active telemetry buffer.`,
     recommendation: `Start optimization in the ${largestKind.kind} journey. Focus on its highest-duration events before making broad changes elsewhere.`,
-    impact: "Optimization opportunity", confidence: 76, evidence: byDuration.filter((event) => event.kind === largestKind.kind).slice(0, 5),
+    impact: "Optimization opportunity", confidence: 76, evidence: byDuration.filter((event) => metricCategory(event) === largestKind.kind).slice(0, 5),
   });
   return insights.sort((a, b) => severityOrder[a.severity] - severityOrder[b.severity]);
 }
@@ -320,7 +325,7 @@ function buildTelemetryPrompt(events: TelemetryEvent[], insights: Insight[], que
     statusCounts[event.status] += 1;
     kindCounts[event.kind] = (kindCounts[event.kind] ?? 0) + 1;
   }
-  const topEvents = [...events].sort((left, right) => right.duration - left.duration).slice(0, 30).map((event) => ({ sequence: event.sequence, name: event.name, kind: event.kind, status: event.status, durationMs: Number(event.duration.toFixed(3)) }));
+  const topEvents = events.filter(isMeasuredEvent).sort((left, right) => right.duration - left.duration).slice(0, 30).map((event) => ({ sequence: event.sequence, name: event.name, category: metricCategory(event), kind: event.kind, durationMs: Number(event.duration.toFixed(3)) }));
   const findingSummary = insights.map((insight) => ({ severity: insight.severity, category: insight.category, title: insight.title, summary: insight.summary, recommendation: insight.recommendation, confidence: insight.confidence, evidenceSequences: insight.evidence.map((event) => event.sequence) }));
   return `User question:\n${question.trim()}\n\nReduced telemetry context (raw payloads intentionally excluded):\n${JSON.stringify({ totalEvents: events.length, statusCounts, kindCounts, findings: findingSummary, longestEvents: topEvents }, null, 2)}`;
 }
@@ -328,19 +333,21 @@ function buildTelemetryPrompt(events: TelemetryEvent[], insights: Insight[], que
 function buildFindingsPrompt(events: TelemetryEvent[]) {
   const statusCounts = { ok: 0, warning: 0, error: 0 };
   const kindStats: Record<string, { count: number; totalDurationMs: number; maxDurationMs: number }> = {};
-  for (const event of events) {
-    statusCounts[event.status] += 1;
-    const stats = kindStats[event.kind] ?? { count: 0, totalDurationMs: 0, maxDurationMs: 0 };
+  for (const event of events) statusCounts[event.status] += 1;
+  for (const event of events.filter(isMeasuredEvent)) {
+    const category = metricCategory(event) ?? event.kind;
+    const stats = kindStats[category] ?? { count: 0, totalDurationMs: 0, maxDurationMs: 0 };
     stats.count += 1;
     stats.totalDurationMs += event.duration;
     stats.maxDurationMs = Math.max(stats.maxDurationMs, event.duration);
-    kindStats[event.kind] = stats;
+    kindStats[category] = stats;
   }
   const signals = [...events]
     .sort((left, right) => severityOrderForEvent(left) - severityOrderForEvent(right) || right.duration - left.duration)
     .slice(0, 100)
-    .map((event) => ({ sequence: event.sequence, name: event.name, kind: event.kind, status: event.status, durationMs: Number(event.duration.toFixed(3)) }));
-  return `Analyze this telemetry and return 1 to 6 prioritized findings.\n\nRequired JSON schema:\n{"findings":[{"severity":"critical|warning|opportunity","category":"Performance|Reliability|Network|Runtime","title":"string","summary":"string","recommendation":"string","impact":"string","confidence":0,"evidenceSequences":[1,2]}]}\n\nRules:\n- evidenceSequences must contain only sequence numbers present below.\n- confidence must be an integer from 0 to 100.\n- If evidence is insufficient, return fewer findings.\n- Do not repeat the same root cause.\n\nTelemetry:\n${JSON.stringify({ totalEvents: events.length, statusCounts, kindStats, signals }, null, 2)}`;
+    .map((event) => ({ sequence: event.sequence, name: event.name, category: metricCategory(event), kind: event.kind, status: event.status, durationMs: isMeasuredEvent(event) ? Number(event.duration.toFixed(3)) : null }));
+  const transfers = groupNetworkTransfers(events).filter((transfer) => transfer.duration > 0).sort((left, right) => right.duration - left.duration).slice(0, 20).map((transfer) => ({ requestId: transfer.requestId, url: transfer.url, durationMs: Number(transfer.duration.toFixed(3)), eventSequences: transfer.events.map((event) => event.sequence) }));
+  return `Analyze this telemetry and return 1 to 6 prioritized findings.\n\nRequired JSON schema:\n{"findings":[{"severity":"critical|warning|opportunity","category":"Performance|Reliability|Network|Runtime","title":"string","summary":"string","recommendation":"string","impact":"string","confidence":0,"evidenceSequences":[1,2]}]}\n\nRules:\n- evidenceSequences must contain only sequence numbers present below.\n- confidence must be an integer from 0 to 100.\n- If evidence is insufficient, return fewer findings.\n- Do not repeat the same root cause.\n- Network durations are aggregated per transfer, not summed from repeated descriptions of the same stage.\n- Only positive measured durations support latency claims; boundary, cached, derived, replay and error durations are not measured work.\n\nTelemetry:\n${JSON.stringify({ totalEvents: events.length, statusCounts, measuredKindStats: kindStats, slowTransfers: transfers, signals }, null, 2)}`;
 }
 
 function severityOrderForEvent(event: TelemetryEvent) {

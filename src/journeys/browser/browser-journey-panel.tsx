@@ -10,6 +10,10 @@ import { useBrowserJourneyStore } from "./store";
 import type { BrowserJourneyNode } from "./types";
 import { browserCalls } from "./trace-model";
 import { layoutBrowserFlow, type BrowserFlowData } from "./layout";
+import type { TelemetryEvent } from "@/src/core/types";
+import { isMeasuredEvent } from "@/src/core/metrics";
+import { observatoryBus } from "@/src/core/event-bus";
+import { useTelemetryStore } from "@/src/stores";
 
 function BrowserCard({ data }: NodeProps) {
   const item = data as unknown as BrowserFlowData;
@@ -48,6 +52,14 @@ export function BrowserJourneyPanel() {
   const [flow, setFlow] = useState<{ nodes: Node[]; edges: Edge[] }>({ nodes: [], edges: [] });
   const { nodes: live, trace, cursor, playing, speed, revealed, phase, blockedReason, play, seek, setSpeed, reveal } = useBrowserJourneyStore();
   useEffect(() => {
+    const ingest = (events: TelemetryEvent[]) => {
+      if (events.length) useBrowserJourneyStore.getState().ingest(events);
+    };
+    const unsubscribe = observatoryBus.on("raw", ingest);
+    ingest(useTelemetryStore.getState().events);
+    return unsubscribe;
+  }, []);
+  useEffect(() => {
     if (!playing) return;
     const timer = window.setInterval(() => {
       const state = useBrowserJourneyStore.getState();
@@ -71,7 +83,7 @@ export function BrowserJourneyPanel() {
     void layoutBrowserFlow(visibleItems, styledEdges, expandedIds, toggleExpanded).then((next) => { if (!cancelled) setFlow(next); });
     return () => { cancelled = true; };
   }, [visibleItems, styledEdges, expandedIds, toggleExpanded]);
-  const total = live.reduce((sum, item) => sum + item.duration, 0);
+  const total = live.reduce((sum, item) => sum + (item.duration > 0 && item.status === "complete" ? item.duration : 0), 0);
   const views = ["journey", "timeline", "dependencies", "frames", "resources", "event-loop", "javascript"];
   const viewLabels: Record<string, string> = { journey: "Journey", timeline: "Browser timeline", dependencies: "Dependencies", frames: "Frames", resources: "Resources", "event-loop": "Event loop", javascript: "JavaScript" };
   return <main className="internet-journey browser-journey">
@@ -88,7 +100,7 @@ export function BrowserJourneyPanel() {
     {view === "journey" && selectedId && <NodeDetails item={live.find((item) => item.id === selectedId)} onClose={() => setSelectedId(null)}/>} 
     {view === "timeline" && <TraceTimeline trace={trace}/>} {view === "dependencies" && <DependencyView trace={trace}/>} {view === "resources" && <ResourceView trace={trace}/>} {view === "frames" && <FrameView trace={trace}/>} {view === "event-loop" && <EventLoopView trace={trace}/>} {view === "javascript" && <CallGraphView trace={trace}/>}
     {view === "journey" && (phase === "running" || phase === "complete") && <section className="journey-waterfall"><header><strong>Browser processing waterfall</strong><span>Total measured <b>{total ? `${total.toFixed(3)} ms` : "Awaiting Koko events"}</b></span></header><div>{live.filter((item) => item.duration > 0).map((item) => <span key={item.id}><small>{item.title}</small><i style={{ width: `${Math.max(2, item.duration / Math.max(total, 1) * 100)}%` }}/><b>{item.duration.toFixed(2)} ms</b></span>)}</div></section>}
-    {phase === "complete" && <footer className="journey-boundary"><strong>Frame presented.</strong><span>Browser Journey ends here. Every unavailable stage remains explicit until Koko Core emits supporting telemetry.</span><button>Open Rendering Explorer →</button></footer>}
+    {phase === "complete" && <footer className="journey-boundary"><strong>Document/frame completion boundary.</strong><span>This is a lifecycle boundary, not proof that a frame was presented. Every unavailable stage remains explicit until Koko Core emits supporting telemetry.</span><button>Open Rendering Explorer →</button></footer>}
   </main>;
 }
 
@@ -130,7 +142,7 @@ function TraceTimeline({ trace }: { trace: Trace }) {
   const start = Math.min(...filtered.map((span) => span.start), Date.now());
   const end = Math.max(...filtered.map((span) => span.start + span.duration), start + 1);
   const range = Math.max(end - start, 1);
-  const total = filtered.reduce((sum, span) => sum + span.duration, 0);
+  const total = filtered.reduce((sum, span) => sum + (isMeasuredEvent(span.event) ? span.duration : 0), 0);
   const errors = filtered.filter((span) => span.event.status === "error").length;
   const warnings = filtered.filter((span) => span.event.status === "warning").length;
   const selected = browserSpans.find((span) => span.id === selectedId);
@@ -138,7 +150,7 @@ function TraceTimeline({ trace }: { trace: Trace }) {
   return <section className="trace-view browser-global-timeline"><header><strong>Execution timeline</strong><span>{filtered.length} of {browserSpans.length} browser spans</span></header>
     <section className="global-timeline-summary">
       <article><span>Visible spans</span><strong>{filtered.length.toLocaleString()}</strong><small>of {browserSpans.length.toLocaleString()} in this browser trace</small></article>
-      <article><span>Total event duration</span><strong>{formatTimelineDuration(total)}</strong><small>{formatTimelineDuration(range)} time range</small></article>
+      <article><span>Total measured duration</span><strong>{formatTimelineDuration(total)}</strong><small>{formatTimelineDuration(range)} time range</small></article>
       <article><span>Errors</span><strong className={errors ? "status-text--error" : "status-text--ok"}>{errors}</strong><small>{warnings} warnings</small></article>
       <article><span>Threads</span><strong>{lanes.length}</strong><small>{kinds.length} browser subsystems</small></article>
     </section>
@@ -279,7 +291,7 @@ function EventLoopView({ trace }: { trace: Trace }) {
   );
 }
 function DependencyView({ trace }: { trace: Trace }) { return <section className="trace-view"><header><strong>Stage dependencies</strong><span>{browserJourneyEdges.length} declared edges</span></header><table className="trace-table"><thead><tr><th>From</th><th>To</th><th>Reason</th><th>Status</th></tr></thead><tbody>{browserJourneyEdges.map((edge) => { const source = trace.spans.some((span) => span.stage === edge.source); const target = trace.spans.some((span) => span.stage === edge.target); return <tr key={edge.id}><td>{edge.source}</td><td>{edge.target}</td><td>{edge.label}</td><td>{source && target ? "observed" : "awaiting telemetry"}</td></tr>; })}</tbody></table></section>; }
-function FrameView({ trace }: { trace: Trace }) { return <section className="trace-view"><header><strong>Frame lifecycle</strong><span>{trace.frames.length} frame boundaries</span></header>{trace.frames.length ? <div className="event-queue">{trace.frames.map((frame) => <article key={frame.id}><b>{frame.presented ? "Frame presented" : "Composite frame"}</b><span>{frame.id}</span><strong>{frame.duration.toFixed(3)} ms</strong></article>)}</div> : <Empty>Core has not emitted frame timing for this navigation yet.</Empty>}</section>; }
+function FrameView({ trace }: { trace: Trace }) { const presented = trace.frames.filter((frame) => frame.presented); const boundaries = trace.frames.length - presented.length; return <section className="trace-view"><header><strong>Frame lifecycle</strong><span>{presented.length} presented · {boundaries} completion boundaries</span></header>{trace.frames.length ? <div className="event-queue">{trace.frames.map((frame) => <article key={frame.id}><b>{frame.presented ? "Frame presented" : "Frame completion boundary"}</b><span>{frame.id}</span><strong>{frame.duration > 0 ? `${frame.duration.toFixed(3)} ms` : "Boundary"}</strong></article>)}</div> : <Empty>Core has not emitted frame timing for this navigation yet.</Empty>}</section>; }
 
 function MiniLineChart({ values, color, label }: { values: number[]; color: string; label: string }) {
   const W = 320; const H = 52;
@@ -358,7 +370,7 @@ function CallGraphView({ trace }: { trace: Trace }) {
   for (const ev of jsEvents) {
     const url = typeof ev.payload.scriptUrl === "string" ? ev.payload.scriptUrl : "(inline)";
     const existing = byUrl.get(url) ?? { url, totalDur: 0, count: 0, events: [] };
-    existing.totalDur += ev.duration;
+    existing.totalDur += isMeasuredEvent(ev) ? ev.duration : 0;
     existing.count += 1;
     existing.events.push(ev);
     byUrl.set(url, existing);
@@ -427,7 +439,7 @@ function CallGraphView({ trace }: { trace: Trace }) {
                   </span>
                   <span className="cg-script__count">{script.count}×</span>
                   <span className="cg-script__dur">{script.totalDur.toFixed(2)} ms</span>
-                  <span className="cg-script__share">{(script.totalDur / totalScriptDur * 100).toFixed(1)}%</span>
+                  <span className="cg-script__share">{totalScriptDur > 0 ? `${(script.totalDur / totalScriptDur * 100).toFixed(1)}%` : "—"}</span>
                   <span className="cg-script__bar"><span style={{ width: `${barW}%`, background: "#42c997" }} /></span>
                 </button>
                 {isOpen && (
@@ -437,7 +449,7 @@ function CallGraphView({ trace }: { trace: Trace }) {
                         <span className="cg-slot__seq">#{i + 1}</span>
                         <span className="cg-slot__name">{ev.name}</span>
                         <span className="cg-slot__kind">{typeof ev.payload.scriptKind === "string" ? ev.payload.scriptKind as string : ev.kind}</span>
-                        <span className="cg-slot__dur">{ev.duration.toFixed(3)} ms</span>
+                        <span className="cg-slot__dur">{isMeasuredEvent(ev) ? `${ev.duration.toFixed(3)} ms` : "—"}</span>
                         {typeof ev.payload.cpuPercent === "number" && <span className="cg-slot__cpu">{(ev.payload.cpuPercent as number).toFixed(1)}% CPU</span>}
                       </div>
                     ))}

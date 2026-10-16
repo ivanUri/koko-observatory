@@ -1,0 +1,51 @@
+/* Typography for Overview only. Other pages intentionally keep their own
+ * density so a readability fix here does not resize the whole application. */
+.overviewPage :global(.overview-context) {
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.overviewPage :global(.metric-top) {
+  font-size: 10px;
+}
+
+.overviewPage :global(.metric-card .delta) {
+  font-size: 11px;
+}
+
+.overviewPage :global(.card-header h2) {
+  font-size: 13px;
+}
+
+.overviewPage :global(.card-header p) {
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.overviewPage :global(.journey-card__name),
+.overviewPage :global(.journey-card__err),
+.overviewPage :global(.journey-card__warn) {
+  font-size: 9px;
+}
+
+.overviewPage :global(.journey-card__meta) {
+  font-size: 10px;
+}
+
+.overviewPage :global(.pipeline-coverage) {
+  gap: 6px;
+  padding: 14px 14px 8px;
+}
+
+.overviewPage :global(.pipeline-stage) {
+  padding: 4px 8px;
+  font-size: 10px;
+  line-height: 1.35;
+}
+
+.overviewPage :global(.pipeline-coverage__bar) {
+  margin: 4px 14px 12px;
+}
+
+/* Graph page typography is scoped here because graph nodes have a different
+ * density from the dashboard and should not resize other pages. */

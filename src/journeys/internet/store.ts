@@ -1,6 +1,8 @@
 import { create } from "zustand";
 import { internetJourneyNodes } from "./data";
 import type { TelemetryEvent } from "@/src/core/types";
+import { isMeasuredEvent } from "@/src/core/metrics";
+import { lockDocumentRequest, matchesLockedDocument } from "@/src/core/document-transfer";
 import type { JourneyNode } from "./types";
 
 interface InternetJourneyState {
@@ -14,6 +16,7 @@ interface InternetJourneyState {
   recordedEvents: TelemetryEvent[];
   revealedCount: number;
   activeUrl?: string;
+  navigationRequestId?: string;
   expanded?: string;
   play: (playing: boolean) => void;
   seek: (cursor: number) => void;
@@ -22,6 +25,7 @@ interface InternetJourneyState {
   setQuery: (query: string) => void;
   setInputUrl: (url: string) => void;
   toggleRecording: () => void;
+  clear: () => void;
   revealNext: () => void;
   toggle: (id: string) => void;
   ingest: (events: TelemetryEvent[]) => void;
@@ -30,11 +34,12 @@ interface InternetJourneyState {
 
 export const useInternetJourneyStore = create<InternetJourneyState>((set) => ({
   cursor: 0, playing: false, speed: 1, mode: "education", query: "",
-  phase: "idle", recording: false, recordedEvents: [], revealedCount: 0, activeUrl: undefined,
+  phase: "idle", recording: false, recordedEvents: [], revealedCount: 0, activeUrl: undefined, navigationRequestId: undefined,
   nodes: internetJourneyNodes,
   play: (playing) => set({ playing }),
   seek: (cursor) => set({ cursor: Math.max(0, Math.min(internetJourneyNodes.length - 1, cursor)) }),
   setSpeed: (speed) => set({ speed }), setMode: (mode) => set({ mode }), setQuery: (query) => set({ query }),
+  clear: () => set({ cursor: 0, playing: false, phase: "idle", recording: false, recordedEvents: [], revealedCount: 0, activeUrl: undefined, navigationRequestId: undefined, expanded: undefined, nodes: internetJourneyNodes }),
   toggleRecording: () => set((state) => ({ recording: !state.recording, recordedEvents: state.recording ? state.recordedEvents : [] })),
   revealNext: () => set((state) => ({ revealedCount: Math.min(internetJourneyNodes.length, state.revealedCount + 1) })),
   setInputUrl: (url) => set((state) => {
@@ -89,7 +94,7 @@ export const useInternetJourneyStore = create<InternetJourneyState>((set) => ({
         node.metadata.measurement = "unavailable";
         node.metadata.summary = [{ label: "State", value: "Not reached because URL validation failed" }];
       }
-      return { nodes: next, activeUrl: url, phase: "error", cursor: 0, playing: false, revealedCount: next.length };
+      return { nodes: next, activeUrl: url, navigationRequestId: undefined, phase: "error", cursor: 0, playing: false, revealedCount: next.length };
     }
     for (const node of next) {
       if (node.id !== "url-input" && node.id !== "url-parse" && node.id !== "routing") {
@@ -100,19 +105,19 @@ export const useInternetJourneyStore = create<InternetJourneyState>((set) => ({
         node.metadata.measurement = node.id === "received" ? "boundary" : "unavailable";
       }
     }
-    return { nodes: next, activeUrl: new URL(url).href, phase: "running", cursor: 1, playing: false, revealedCount: 1 };
+    return { nodes: next, activeUrl: new URL(url).href, navigationRequestId: undefined, phase: "running", cursor: 1, playing: false, revealedCount: 1 };
   }),
   toggle: (id) => set((state) => ({ expanded: state.expanded === id ? undefined : id })),
   ingest: (events) => set((state) => {
     const next = state.nodes.map((node) => ({ ...node, metadata: { ...node.metadata, summary: [...node.metadata.summary] } }));
+    let navigationRequestId = state.navigationRequestId;
     for (const event of events) {
       if (event.kind !== "network") continue;
       const payload = event.payload as Record<string, unknown>;
-      if (typeof payload.requestedUrl === "string" && state.activeUrl) {
-        try {
-          if (new URL(payload.requestedUrl).href !== state.activeUrl) continue;
-        } catch { continue; }
-      }
+      navigationRequestId = lockDocumentRequest(payload, navigationRequestId);
+      // Subresources share journey stage names with the navigation. Only the
+      // locked document request may write DNS, TCP, TLS and response nodes.
+      if (!matchesLockedDocument(payload, navigationRequestId)) continue;
       const stage = typeof payload.journeyStage === "string" ? payload.journeyStage : undefined;
       const node = stage ? next.find((candidate) => candidate.id === stage) : undefined;
       if (!node) continue;
@@ -138,13 +143,15 @@ export const useInternetJourneyStore = create<InternetJourneyState>((set) => ({
           }
         } catch {}
       }
-      node.duration = event.duration;
+      node.duration = isMeasuredEvent(event) ? event.duration : 0;
       node.timestamp = event.timestamp;
       node.metadata.estimated = false;
-      const measurement = payload.measurement;
+      const measurement = String(payload.measurementState ?? payload.measurement ?? "").toLowerCase();
       node.metadata.measurement = measurement === "boundary" || measurement === "reused" || measurement === "unavailable" || measurement === "not-timed"
         ? measurement
-        : event.duration > 0 ? "measured" : "unavailable";
+        : ["cached", "derived", "estimated", "not-applicable", "not-applicable-replay", "below-resolution"].includes(measurement)
+          ? measurement
+          : isMeasuredEvent(event) ? "measured" : "unavailable";
       node.status = event.status === "error"
         ? "error"
         : (event.status as string) === "skipped"
@@ -260,6 +267,7 @@ export const useInternetJourneyStore = create<InternetJourneyState>((set) => ({
     const received = next.find((node) => node.id === "received")?.status === "complete";
     return {
       nodes: next,
+      navigationRequestId,
       phase: failed ? "error" : received ? "received" : state.phase,
       recordedEvents: state.recording ? [...state.recordedEvents, ...events] : state.recordedEvents,
     };

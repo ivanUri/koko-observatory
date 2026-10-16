@@ -14,6 +14,7 @@ interface ExecutionState {
   executions: ExecutionRecord[];
   checkpoints: CheckpointRecord[];
   branches: BranchRecord[];
+  seenEventIds: Set<string>;
   activeExecutionId?: string;
   hydrated: boolean;
   ingest: (events: TelemetryEvent[]) => void;
@@ -28,17 +29,31 @@ export const useExecutionStore = create<ExecutionState>((set, get) => ({
   executions: [],
   checkpoints: [],
   branches: [],
+  seenEventIds: new Set(),
   hydrated: false,
-  clear: () => set({ executions: [], checkpoints: [], branches: [], activeExecutionId: undefined }),
+  clear: () => set({ executions: [], checkpoints: [], branches: [], activeExecutionId: undefined, seenEventIds: new Set() }),
   ingest: (events) => {
     if (!events.length) return;
+    const seen = get().seenEventIds;
+    const uniqueEvents: TelemetryEvent[] = [];
+    for (const event of events) {
+      if (seen.has(event.id)) continue;
+      seen.add(event.id);
+      uniqueEvents.push(event);
+    }
+    if (!uniqueEvents.length) return;
+    if (seen.size > 50_000) {
+      const keep = [...seen].slice(-25_000);
+      seen.clear();
+      for (const id of keep) seen.add(id);
+    }
     const incoming = new Map<string, ExecutionRecord>();
-    const replayExecution = events.find((event) => {
+    const replayExecution = uniqueEvents.find((event) => {
       const parentExecutionId = event.payload.executionParentId ?? event.payload.execution_parent_id;
       return typeof parentExecutionId === "string" && parentExecutionId.length > 0;
     });
-    const coreCheckpoints = events.map(checkpointFromCoreEvent).filter((checkpoint): checkpoint is CheckpointRecord => checkpoint !== undefined);
-    for (const event of events) {
+    const coreCheckpoints = uniqueEvents.map(checkpointFromCoreEvent).filter((checkpoint): checkpoint is CheckpointRecord => checkpoint !== undefined);
+    for (const event of uniqueEvents) {
       const id = executionIdFor(event);
       const previous = incoming.get(id) ?? get().executions.find((execution) => execution.id === id);
       const capabilities = new Set([...(previous?.capabilities ?? ["recording", "causal-graph", "bookmark"]), ...executionCapabilitiesFor(event)]);
@@ -66,10 +81,10 @@ export const useExecutionStore = create<ExecutionState>((set, get) => ({
       return {
         executions: mergeExecutions(state.executions, [...incoming.values()]),
         checkpoints: [...newCheckpoints, ...state.checkpoints],
-        activeExecutionId: replayExecution ? executionIdFor(replayExecution) : state.activeExecutionId ?? executionIdFor(events.at(-1)!),
+        activeExecutionId: replayExecution ? executionIdFor(replayExecution) : state.activeExecutionId ?? executionIdFor(uniqueEvents.at(-1)!),
       };
     });
-    void persistEvents(events).catch(() => undefined);
+    void persistEvents(uniqueEvents).catch(() => undefined);
     for (const checkpoint of newCheckpoints) void persistCheckpoint(checkpoint).catch(() => undefined);
   },
   hydrate: async () => {

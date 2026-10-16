@@ -5,10 +5,14 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Activity, AlertTriangle, CircleDot, Clock3, Cpu, Database, Gauge, GitBranch, Grid3x3, List, Network, Share2, Waypoints, Wifi, X, Zap } from "lucide-react";
 import { RealtimeChart } from "@/src/components/realtime-chart";
+import styles from "@/src/components/overview-panel.module.css";
+import graphStyles from "@/src/components/graph-panel.module.css";
+import networkStyles from "@/src/components/network-panel.module.css";
 import { useGraphStore, useNetworkStore, useReplayStore, useSelectionStore, useTelemetryStore } from "@/src/stores";
 import type { TelemetryEvent } from "@/src/core/types";
 import { executionIdFor } from "@/src/executions/types";
 import { bucketEventRate, eventsPerSecond, metricCategory, percentile, isMeasuredEvent } from "@/src/core/metrics";
+import { groupNetworkTransfers, networkStageOrder } from "@/src/core/network-metrics";
 
 const ExecutionGraph = dynamic(
   () => import("@/src/components/execution-graph").then((module) => module.ExecutionGraph),
@@ -40,18 +44,20 @@ export function OverviewPanel() {
   const measured = scoped.filter(isMeasuredEvent);
   const errors = scoped.filter((event) => event.status === "error").length;
   const warnings = scoped.filter((event) => event.status === "warning").length;
-  const cpu = latestNumber(scoped, "cpuPercent");
-  const cpuCoresUsed = latestNumber(scoped, "cpuCoresUsed");
-  const cpuWindowMs = latestNumber(scoped, "cpuSampleWindowMs");
-  const memory = latestNumber(scoped, "residentMemoryBytes");
-  const contextSwitches = latestNumber(scoped, "contextSwitches");
-  const diskRead = latestNumber(scoped, "diskReadBytes");
-  const diskWrite = latestNumber(scoped, "diskWriteBytes");
+  const latestSample = [...scoped].reverse().find((event) => ["cpuPercent", "cpuCoresUsed", "cpuSampleWindowMs", "residentMemoryBytes", "contextSwitches", "diskReadBytes", "diskWriteBytes"].some((key) => typeof event.payload[key] === "number"));
+  const cpu = numberPayload(latestSample?.payload, "cpuPercent");
+  const cpuCoresUsed = numberPayload(latestSample?.payload, "cpuCoresUsed");
+  const cpuWindowMs = numberPayload(latestSample?.payload, "cpuSampleWindowMs");
+  const cpuSampleState = stringPayload(latestSample?.payload ?? {}, "cpuSampleState");
+  const memory = numberPayload(latestSample?.payload, "residentMemoryBytes");
+  const contextSwitches = numberPayload(latestSample?.payload, "contextSwitches");
+  const diskRead = numberPayload(latestSample?.payload, "diskReadBytes");
+  const diskWrite = numberPayload(latestSample?.payload, "diskWriteBytes");
   const p95 = percentile(measured.map((event) => event.duration), .95);
   const statusTotal = Math.max(scoped.length, 1);
   const healthy = Math.max(0, scoped.length - errors - warnings);
   const hasTelemetry = scoped.length > 0;
-  const rate = useMemo(() => bucketEventRate(scoped), [scoped]);
+  const rate = useMemo(() => bucketEventRate(scoped, { startMs: range === "all" ? undefined : now - ({ "1m": 60_000, "5m": 300_000, "15m": 900_000 }[range] ?? 300_000), endMs: now, maxBuckets: range === "all" ? 900 : undefined }), [now, range, scoped]);
   const currentRate = eventsPerSecond(scoped, now);
   const stageP95 = (kind: "network" | "javascript" | "render" | "dom" | "scheduler" | "memory") => formatDuration(stageP95Raw(kind));
   const stageP95Raw = (kind: "network" | "javascript" | "render" | "dom" | "scheduler" | "memory") => percentile(measured.filter((event) => metricCategory(event) === kind).map((event) => event.duration), .95);
@@ -135,6 +141,7 @@ export function OverviewPanel() {
 
   return (
     <PanelFrame
+      className={styles.overviewPage}
       eyebrow="Dashboards / Browser runtime"
       title="Koko runtime monitor"
       description="Live operational view across execution, resources, scheduling, and transport."
@@ -164,7 +171,7 @@ export function OverviewPanel() {
         <Metric label="Signals received" value={totalSignals > 0 ? formatNumber(totalSignals) : "—"} delta={`${formatNumber(scoped.length)} in scope · ${events.length} retained · ${currentRate.toFixed(1)}/s`} icon={Activity} />
         <Metric label="Error rate" value={hasTelemetry ? `${(errors / statusTotal * 100).toFixed(2)}%` : "—"} delta={`${errors} errors · ${warnings} warnings`} icon={CircleDot} />
         <Metric label="Measured P95" value={formatDuration(p95)} delta="across all measured stages" icon={Clock3} />
-        <Metric label="CPU capacity" value={cpu == null ? "—" : `${cpu.toFixed(1)}%`} delta={cpu == null ? "Signal unavailable" : cpuCoresUsed == null ? "CPU sample warming up" : `≈ ${cpuCoresUsed.toFixed(2)} cores · ${(cpuWindowMs ?? 0).toFixed(0)} ms window`} icon={Cpu} />
+        <Metric label="CPU capacity" value={cpu == null ? "—" : `${cpu.toFixed(1)}%`} delta={cpu == null ? "Signal unavailable" : cpuCoresUsed == null ? "CPU sample warming up" : `≈ ${cpuCoresUsed.toFixed(2)} cores · ${(cpuWindowMs ?? 0).toFixed(0)} ms window · ${cpuSampleState ?? "unknown"}`} icon={Cpu} />
         <Metric label="Resident memory" value={memory == null ? "—" : formatBytes(memory)} delta={memory == null ? "Signal unavailable" : "core process sample"} icon={Database} />
         <Metric label="Disk read" value={diskRead == null ? "—" : formatBytes(diskRead)} delta={diskRead == null ? "Signal unavailable" : "cumulative bytes read"} icon={Database} />
         <Metric label="Disk write" value={diskWrite == null ? "—" : formatBytes(diskWrite)} delta={diskWrite == null ? "Signal unavailable" : "cumulative bytes written"} icon={Database} />
@@ -416,6 +423,7 @@ export function GraphPanel() {
 
   return (
     <PanelFrame
+      className={graphStyles.graphPage}
       eyebrow="Execution correlation"
       title="Causal execution graph"
       description="Only Core-emitted parent/child identities are shown as causal links. Chronology remains available in the Timeline."
@@ -835,11 +843,11 @@ export function NetworkPanel() {
   const protocols = [...new Set(requests.flatMap((request) => request.protocol === "Unavailable" ? [] : [request.protocol]))];
   const TYPE_TABS = [["all", "All"], ["xhr", "Fetch/XHR"], ["doc", "Doc"], ["script", "JS"], ["css", "CSS"], ["media", "Media"]] as const;
   return (
-    <PanelFrame eyebrow="Network observability" title="Network Requests" description="Completed transfer lifecycles reconstructed from typed queue, DNS, transport, TLS, server and response events.">
+    <PanelFrame className={networkStyles.networkPage} eyebrow="Network observability" title="Network Requests" description="Completed transfer lifecycles reconstructed from typed queue, DNS, transport, TLS, server and response events.">
       <section className="network-summary">
         <article><span>Transfers</span><strong>{requests.length.toLocaleString()}</strong><small>{visible.length} visible</small></article>
         <article><span>Failed</span><strong className={errorCount ? "status-text--error" : "status-text--ok"}>{errorCount}</strong><small>{requests.length ? `${(errorCount / requests.length * 100).toFixed(1)}% error rate` : "No transfers"}</small></article>
-        <article><span>Response bytes</span><strong>{bytes ? formatBytes(bytes) : "Unavailable"}</strong><small>Observed body bytes</small></article>
+        <article><span>Response bytes</span><strong>{bytes == null ? "Unavailable" : formatBytes(bytes)}</strong><small>Observed body bytes</small></article>
         <article><span>Connections</span><strong>{connections || "Unavailable"}</strong><small>Unique connection IDs</small></article>
         <article><span>Protocols</span><strong>{protocols.join(", ") || "Unavailable"}</strong><small>Observed HTTP versions</small></article>
       </section>
@@ -908,44 +916,26 @@ export function NetworkPanel() {
   );
 }
 
-const networkStageOrder = ["queue", "cache", "dns", "routing", "proxy", "tcp", "tls", "request", "redirect", "server", "response", "received"];
 type NetworkRequest = ReturnType<typeof aggregateNetworkRequests>[number];
 
 function aggregateNetworkRequests(events: TelemetryEvent[]) {
-  const groups = new Map<string, TelemetryEvent[]>();
-  const active = new Map<string, { key: string; seen: Set<string>; index: number }>();
-  for (const event of [...events].sort((a, b) => a.sequence - b.sequence)) {
-    const payload = event.payload;
-    const execution = executionIdFor(event);
-    const url = String(payload.url ?? payload.requestedUrl ?? "URL unavailable");
-    const requestId = payload.requestId == null ? undefined : String(payload.requestId);
-    const base = requestId ? `${execution}|request:${requestId}` : `${execution}|url:${url}`;
-    const stage = String(payload.journeyStage ?? event.name);
-    const current = active.get(base);
-    const startsTransfer = stage === "queue" || !current || current.seen.has(stage) || current.seen.has("received");
-    const group = startsTransfer ? { key: `${base}|${(current?.index ?? -1) + 1}`, seen: new Set<string>(), index: (current?.index ?? -1) + 1 } : current;
-    active.set(base, group);
-    group.seen.add(stage);
-    const key = group.key;
-    groups.set(key, [...(groups.get(key) ?? []), event]);
-  }
-  return [...groups].map(([key, grouped]) => {
+  return groupNetworkTransfers(events).map(({ key, events: grouped, duration: measuredDuration }) => {
     const ordered = [...grouped].sort((a, b) => networkStageOrder.indexOf(String(a.payload.journeyStage ?? a.name)) - networkStageOrder.indexOf(String(b.payload.journeyStage ?? b.name)));
     const terminal = [...ordered].reverse().find((event) => event.payload.terminalStatus != null || event.payload.responseStatus != null) ?? ordered.at(-1)!;
     const payload = terminal.payload;
     const statusEvent = ordered.find((event) => event.status === "error");
-    return { key, events: ordered, sessionId: terminal.sessionId, executionId: executionIdFor(terminal), inspectionId: String(payload.inspectionId ?? "Unavailable"), url: String(payload.url ?? payload.requestedUrl ?? "Unavailable"), method: String(payload.method ?? "GET"), resourceType: payloadString(payload, "resourceType"), requestId: typeof payload.requestId === "number" ? payload.requestId : undefined, frameId: typeof payload.frameId === "number" ? payload.frameId : undefined, loaderId: typeof payload.loaderId === "number" ? payload.loaderId : undefined, protocol: String(payload.httpVersion ?? "Unavailable"), remoteIp: String(payload.primaryIp ?? "Unavailable"), connectionId: payload.connectionId == null ? undefined : String(payload.connectionId), statusCode: typeof payload.responseStatus === "number" && payload.responseStatus > 0 ? payload.responseStatus : undefined, responseBytes: latestPayloadNumber(ordered, "responseBodyBytes"), duration: ordered.reduce((sum, event) => sum + Math.max(0, event.duration), 0), terminalStatus: statusEvent || payload.terminalStatus === "error" ? "error" : "ok", connectionReused: payload.connectionReused === true, usedProxy: payload.usedProxy === true, redirectCount: typeof payload.redirectCount === "number" ? payload.redirectCount : undefined, contentType: payloadString(payload, "contentType"), contentEncoding: payloadString(payload, "contentEncoding"), cacheDecision: payloadString(payload, "cacheDecision"),
+    return { key, events: ordered, sessionId: terminal.sessionId, executionId: executionIdFor(terminal), inspectionId: String(payload.inspectionId ?? "Unavailable"), url: String(payload.url ?? payload.requestedUrl ?? "Unavailable"), method: String(payload.method ?? "GET"), resourceType: payloadString(payload, "resourceType"), requestId: typeof payload.requestId === "number" ? payload.requestId : undefined, frameId: typeof payload.frameId === "number" ? payload.frameId : undefined, loaderId: typeof payload.loaderId === "number" ? payload.loaderId : undefined, protocol: String(payload.httpVersion ?? "Unavailable"), remoteIp: String(payload.primaryIp ?? "Unavailable"), connectionId: payload.connectionId == null ? undefined : String(payload.connectionId), statusCode: typeof payload.responseStatus === "number" && payload.responseStatus > 0 ? payload.responseStatus : undefined, responseBytes: latestPayloadNumber(ordered, "responseBodyBytes"), duration: measuredDuration, terminalStatus: statusEvent || payload.terminalStatus === "error" ? "error" : "ok", connectionReused: payload.connectionReused === true, usedProxy: payload.usedProxy === true, redirectCount: typeof payload.redirectCount === "number" ? payload.redirectCount : undefined, contentType: payloadString(payload, "contentType"), contentEncoding: payloadString(payload, "contentEncoding"), cacheDecision: payloadString(payload, "cacheDecision"),
       requestHeaders: payloadString(payload, "requestHeaders"),
       responseHeaders: payloadString(payload, "responseHeaders"),
-      requestBody: payloadString(payload, "requestBody") ?? payloadString(payload, "postData"),
-      responseBody: payloadString(payload, "responseBody"),
+      requestBody: transferField(ordered, "requestBody") ?? payloadString(payload, "postData"),
+      responseBody: transferField(ordered, "responseBody"),
       headers: { "Cache-Control": payloadString(payload, "cacheControl"), Server: payloadString(payload, "server"), Age: payloadString(payload, "age"), Via: payloadString(payload, "via"), ETag: payloadString(payload, "etag") }, failure: statusEvent ? String(statusEvent.payload.error ?? statusEvent.payload.errorMessage ?? statusEvent.payload.failureReason ?? "Network operation failed") : undefined };
   }).sort((a, b) => (b.events.at(-1)?.timestamp ?? 0) - (a.events.at(-1)?.timestamp ?? 0));
 }
 
 function NetworkOverview({ request }: { request: NetworkRequest }) { return <div className="network-detail-grid"><NetworkFact label="Request method" value={request.method}/><NetworkFact label="Response status" value={request.statusCode == null ? "Unavailable" : String(request.statusCode)}/><NetworkFact label="Remote address" value={request.remoteIp}/><NetworkFact label="Connection" value={request.connectionId ?? "Unavailable"}/><NetworkFact label="Connection reused" value={request.connectionReused ? "Yes" : "No / unavailable"}/><NetworkFact label="Proxy used" value={request.usedProxy ? "Yes" : "No"}/><NetworkFact label="Redirects" value={request.redirectCount == null ? "Unavailable" : String(request.redirectCount)}/><NetworkFact label="Cache decision" value={request.cacheDecision ?? "Unavailable"}/><NetworkFact label="Content type" value={request.contentType ?? "Unavailable"}/><NetworkFact label="Content encoding" value={request.contentEncoding ?? "Unavailable"}/><NetworkFact label="Response bytes" value={formatOptionalBytes(request.responseBytes)}/><NetworkFact label="Execution" value={request.executionId}/>{request.failure && <div className="network-failure"><AlertTriangle size={15}/><span><strong>Transfer failed</strong><small>{request.failure}</small></span></div>}</div>; }
 
-function NetworkTiming({ request }: { request: NetworkRequest }) { const max = Math.max(...request.events.map((event) => event.duration), 1); return <div className="network-timing">{networkStageOrder.map((stage) => { const event = request.events.find((candidate) => String(candidate.payload.journeyStage ?? candidate.name) === stage); const measurement = String(event?.payload.measurement ?? "unavailable"); return <div key={stage} className={`network-timing__row network-timing__row--${event?.status ?? "missing"}`}><span>{stage}</span><div><i style={{ width: event && event.duration > 0 ? `${Math.max(2, event.duration / max * 100)}%` : "2%" }}/></div><strong>{!event ? "Not emitted" : measurement === "boundary" ? "Boundary" : measurement === "reused" ? "Reused" : event.duration > 0 ? `${event.duration.toFixed(3)} ms` : measurement}</strong></div>; })}<footer><span>Total measured stage duration</span><strong>{formatDuration(request.duration)}</strong></footer></div>; }
+function NetworkTiming({ request }: { request: NetworkRequest }) { const max = Math.max(...request.events.filter(isMeasuredEvent).map((event) => event.duration), 1); return <div className="network-timing">{networkStageOrder.map((stage) => { const event = request.events.find((candidate) => String(candidate.payload.journeyStage ?? candidate.name) === stage); const measurement = String(event?.payload.measurement ?? "unavailable"); const measured = event && isMeasuredEvent(event); return <div key={stage} className={`network-timing__row network-timing__row--${event?.status ?? "missing"}`}><span>{stage}</span><div><i style={{ width: measured ? `${Math.max(2, event.duration / max * 100)}%` : "2%" }}/></div><strong>{!event ? "Not emitted" : measurement === "boundary" ? "Boundary" : measurement === "reused" ? "Reused" : measured ? `${event.duration.toFixed(3)} ms` : measurement}</strong></div>; })}<footer><span>Total measured stage duration</span><strong>{formatDuration(request.duration)}</strong></footer></div>; }
 
 function NetworkHeaders({ request }: { request: NetworkRequest }) {
   const captured = Object.entries(request.headers).filter((entry): entry is [string, string] => typeof entry[1] === "string");
@@ -1033,6 +1023,7 @@ function NetworkEvents({ request }: { request: NetworkRequest }) { return <div c
 function NetworkFact({ label, value }: { label: string; value: string }) { return <div><small>{label}</small><strong>{value}</strong></div>; }
 function latestPayloadNumber(events: TelemetryEvent[], key: string) { for (let index = events.length - 1; index >= 0; index--) { const value = events[index].payload[key]; if (typeof value === "number" && Number.isFinite(value)) return value; } return undefined; }
 function payloadString(payload: Record<string, unknown>, key: string) { const value = payload[key]; return typeof value === "string" && value.length ? value : undefined; }
+function transferField(events: TelemetryEvent[], key: string) { for (const event of events) { const value = payloadString(event.payload, key); if (value) return value; } return undefined; }
 function requestDisplayName(url: string) { try { const parsed = new URL(url); return `${parsed.hostname}${parsed.pathname}`; } catch { return url; } }
 function formatOptionalBytes(value?: number) { return value == null ? "Unavailable" : formatBytes(value); }
 
@@ -1063,8 +1054,8 @@ export function ReplayPanel() {
   );
 }
 
-function PanelFrame({ eyebrow, title, description, actions, children }: { eyebrow: string; title: string; description: string; actions?: React.ReactNode; children: React.ReactNode }) {
-  return <main className="workspace"><header className="workspace-header"><div><span className="eyebrow">{eyebrow}</span><h1>{title}</h1><p>{description}</p></div>{actions}</header>{children}</main>;
+function PanelFrame({ className, eyebrow, title, description, actions, children }: { className?: string; eyebrow: string; title: string; description: string; actions?: React.ReactNode; children: React.ReactNode }) {
+  return <main className={`workspace${className ? ` ${className}` : ""}`}><header className="workspace-header"><div><span className="eyebrow">{eyebrow}</span><h1>{title}</h1><p>{description}</p></div>{actions}</header>{children}</main>;
 }
 
 function Metric({ label, value, delta, positive, icon: Icon }: { label: string; value: string; delta: string; positive?: boolean; icon: typeof Activity }) {
@@ -1164,12 +1155,11 @@ function belongsToJourney(event: TelemetryEvent, journey: "internet" | "browser"
   return typeof event.payload.systemStage === "string" || event.kind === "memory";
 }
 function formatBytes(value: number) { if (value >= 1024 * 1024) return `${(value / (1024 * 1024)).toFixed(1)} MB`; if (value >= 1024) return `${(value / 1024).toFixed(1)} KB`; return `${value.toFixed(0)} B`; }
-function latestNumber(events: ReturnType<typeof useTelemetryStore.getState>["events"], ...keys: string[]) { for (let index = events.length - 1; index >= 0; index -= 1) { for (const key of keys) { const value = events[index].payload[key]; if (typeof value === "number" && Number.isFinite(value)) return value; } } return undefined; }
 function statusLabel(status: ReturnType<typeof useTelemetryStore.getState>["status"]) { return status === "live" ? "streaming" : status; }
 function barWidth(value: number, events: ReturnType<typeof useTelemetryStore.getState>["events"]) { const max = Math.max(1, percentile(events.map((event) => event.duration), .99)); return `${Math.min(100, value / max * 100)}%`; }
 function barWidthFromValue(value: string) { const number = Number.parseFloat(value); return Number.isFinite(number) ? `${Math.min(100, number / 200 * 100)}%` : "0%"; }
 function stringPayload(payload: Record<string, unknown>, key: string) { const value = payload[key]; return typeof value === "string" && value.length ? value : undefined; }
-function numberPayload(payload: Record<string, unknown>, key: string) { const value = payload[key]; return typeof value === "number" && Number.isFinite(value) ? value : undefined; }
+function numberPayload(payload: Record<string, unknown> | undefined, key: string) { const value = payload?.[key]; return typeof value === "number" && Number.isFinite(value) ? value : undefined; }
 function graphDepth(nodeIds: string[], edges: Array<{ source: string; target: string }>) {
   const children = new Map<string, string[]>();
   const targets = new Set<string>();

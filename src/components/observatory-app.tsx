@@ -4,21 +4,16 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { motion } from "framer-motion";
 import { ChevronDown, Clock3, Database, FileDown, Globe2, Settings, Sparkles, SlidersHorizontal } from "lucide-react";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { WebSocketTransport } from "@/src/core/transport";
 import { TelemetryPipeline } from "@/src/core/pipeline";
 import { observatoryBus } from "@/src/core/event-bus";
 import { getPlugin, plugins } from "@/src/plugins/registry";
-import { useExportStore, useGraphStore, useSettingsStore, useTelemetryStore, useUIStore } from "@/src/stores";
+import { useExportStore, useGraphStore, useSelectionStore, useSettingsStore, useTelemetryStore, useUIStore } from "@/src/stores";
 import { useInternetJourneyStore } from "@/src/journeys/internet/store";
 import { useBrowserJourneyStore } from "@/src/journeys/browser/store";
 import { useExecutionStore } from "@/src/executions/store";
-import { countStoredExecutionEvents, loadRecentExecutionEvents } from "@/src/executions/artifact-store";
+import { clearStoredArtifacts, countStoredExecutionEvents, loadRecentExecutionEvents } from "@/src/executions/artifact-store";
 import { useAutomationStore } from "@/src/automation/store";
-
-const queryClient = new QueryClient({
-  defaultOptions: { queries: { staleTime: 30_000, refetchOnWindowFocus: false } },
-});
 
 type WaitUntil = "load" | "domcontentloaded" | "networkidle" | "domstable" | "done";
 
@@ -57,11 +52,7 @@ const defaultInspectOptions: InspectOptions = {
 };
 
 export function ObservatoryApp({ initialPlugin = "overview" }: { initialPlugin?: string }) {
-  return (
-    <QueryClientProvider client={queryClient}>
-      <ObservatoryRuntime initialPlugin={initialPlugin} />
-    </QueryClientProvider>
-  );
+  return <ObservatoryRuntime initialPlugin={initialPlugin} />;
 }
 
 function ObservatoryRuntime({ initialPlugin }: { initialPlugin: string }) {
@@ -97,6 +88,16 @@ function ObservatoryRuntime({ initialPlugin }: { initialPlugin: string }) {
       useTelemetryStore.getState().clear();
       useExecutionStore.getState().clear();
       useAutomationStore.getState().clear();
+      useGraphStore.getState().update([], []);
+      useInternetJourneyStore.getState().clear();
+      useBrowserJourneyStore.getState().clear();
+      useSelectionStore.getState().select(undefined);
+      useExportStore.getState().setProgress(undefined);
+      // Events from an inspection that was already in flight can finish after
+      // the local clear started. Clear once more when the bridge confirms its
+      // execution folders have been removed, so those late writes cannot make
+      // deleted site data appear again after reload.
+      void clearStoredArtifacts().catch(() => undefined);
     });
     const unsubscribe = observatoryBus.on("snapshot", (snapshot) => {
       useTelemetryStore.getState().append(snapshot.events, snapshot.rates, snapshot.p95);
@@ -113,7 +114,6 @@ function ObservatoryRuntime({ initialPlugin }: { initialPlugin: string }) {
     });
     const unsubscribeRaw = observatoryBus.on("raw", (events) => {
       useInternetJourneyStore.getState().ingest(events);
-      useBrowserJourneyStore.getState().ingest(events);
     });
     void pipeline.start().catch(() => {
       useTelemetryStore.getState().setStatus("offline");

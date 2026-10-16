@@ -100,6 +100,23 @@ export function executionIdFor(event: TelemetryEvent) {
   return explicit ?? event.sessionId;
 }
 
+export function executionEventKey(event: TelemetryEvent) {
+  return `${executionIdFor(event)}:${event.id}`;
+}
+
+/** First copy of each execution event that is not already stored. One pass, no nested search. */
+export function selectNewEvents(events: TelemetryEvent[], existingIds: ReadonlySet<string>) {
+  const seen = new Set(existingIds);
+  const unique: TelemetryEvent[] = [];
+  for (const event of events) {
+    const id = executionEventKey(event);
+    if (seen.has(id)) continue;
+    seen.add(id);
+    unique.push(event);
+  }
+  return unique;
+}
+
 export function eventParentId(event: TelemetryEvent) {
   return event.parentId ?? stringPayload(event.payload, "causalParent") ?? stringPayload(event.payload, "causal_parent");
 }

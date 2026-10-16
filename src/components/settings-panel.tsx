@@ -79,16 +79,22 @@ export function SettingsPanel() {
   const clearSiteData = async () => {
     if (!window.confirm("Delete all stored site data, execution history, checkpoints and browser profiles? This cannot be undone.")) return;
     setCleaning(true);
-    setCleanupMessage("");
-    clearTelemetry();
-    useAutomationStore.getState().clear();
-    await clearStoredArtifacts();
-    if (transportStatus !== "live") {
+    setCleanupMessage("Clearing local data…");
+    try {
+      clearTelemetry();
+      useAutomationStore.getState().clear();
+      await clearStoredArtifacts();
+      if (transportStatus !== "live") {
+        setCleaning(false);
+        setCleanupMessage("Local data cleared. Start the telemetry bridge to clean its execution folder.");
+        return;
+      }
+      setCleanupMessage("Local data cleared. Waiting for bridge confirmation…");
+      window.dispatchEvent(new CustomEvent("koko:clear-execution-data"));
+    } catch (error) {
       setCleaning(false);
-      setCleanupMessage("Local data cleared. Start the telemetry bridge to clean its execution folder.");
-      return;
+      setCleanupMessage(`Unable to clear local data: ${error instanceof Error ? error.message : "IndexedDB error"}`);
     }
-    window.dispatchEvent(new CustomEvent("koko:clear-execution-data"));
   };
 
   return (
