@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import type { TelemetryEvent } from "@/src/core/types";
 import { isMeasuredEvent } from "@/src/core/metrics";
+import { resolveTransferSizes } from "@/src/core/network-metrics";
 import { lockDocumentRequest, matchesLockedDocument } from "@/src/core/document-transfer";
 import { browserJourneyNodes } from "./data";
 import type { BrowserJourneyNode } from "./types";
@@ -97,10 +98,18 @@ export const useBrowserJourneyStore = create<{
       for (const key of ["contentType", "contentEncoding", "responseMemoryState"]) if (typeof payload[key] === "string") target.metadata[key] = payload[key] as string;
       for (const key of ["compressedSizeBytes", "uncompressedSizeBytes", "responseMemoryBytes", "responseBodyBytes"]) if (typeof payload[key] === "number") target.metadata[key] = payload[key] as number;
       if (stage === "response" && event.status === "ok") {
+        const decodedBytes = resolveTransferSizes({
+          transferredBytes: typeof payload.responseBodyBytes === "number" ? payload.responseBodyBytes : undefined,
+          uncompressedBytes: typeof payload.uncompressedSizeBytes === "number" ? payload.uncompressedSizeBytes : undefined,
+          responseMemoryState: typeof payload.responseMemoryState === "string" ? payload.responseMemoryState : undefined,
+          responseBody: typeof payload.responseBody === "string" ? payload.responseBody : undefined,
+          bodyTruncated: payload.bodyTruncated === true,
+          contentEncoding: typeof payload.contentEncoding === "string" ? payload.contentEncoding : undefined,
+        }).decodedBytes;
         markBoundary("decompression", "HTTP response metadata", {
           contentEncoding: typeof payload.contentEncoding === "string" ? payload.contentEncoding : "identity / not provided",
           compressedSizeBytes: typeof payload.compressedSizeBytes === "number" ? payload.compressedSizeBytes : 0,
-          uncompressedSizeBytes: typeof payload.uncompressedSizeBytes === "number" ? payload.uncompressedSizeBytes : typeof payload.responseBodyBytes === "number" ? payload.responseBodyBytes : 0,
+          ...(decodedBytes == null ? {} : { uncompressedSizeBytes: decodedBytes }),
         });
         markBoundary("cache", "Network cache decision", { cacheDecision: typeof payload.cacheDecision === "string" ? payload.cacheDecision : "not-observed" });
       }

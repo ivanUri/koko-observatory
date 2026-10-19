@@ -10,9 +10,8 @@ import graphStyles from "@/src/components/graph-panel.module.css";
 import networkStyles from "@/src/components/network-panel.module.css";
 import { useGraphStore, useNetworkStore, useReplayStore, useSelectionStore, useTelemetryStore } from "@/src/stores";
 import type { TelemetryEvent } from "@/src/core/types";
-import { executionIdFor } from "@/src/executions/types";
-import { bucketEventRate, eventsPerSecond, metricCategory, percentile, isMeasuredEvent } from "@/src/core/metrics";
-import { groupNetworkTransfers, networkStageOrder } from "@/src/core/network-metrics";
+import { bucketEventRate, eventsPerSecond, metricCategory, percentile, isMeasuredEvent, utf8ByteLength } from "@/src/core/metrics";
+import { aggregateNetworkRequests, matchesNetworkType, networkStageOrder, type NetworkRequestSummary } from "@/src/core/network-metrics";
 
 const ExecutionGraph = dynamic(
   () => import("@/src/components/execution-graph").then((module) => module.ExecutionGraph),
@@ -326,15 +325,27 @@ export function TimelinePanel() {
   const selected = filtered.find((event) => event.id === selectedId) ?? events.find((event) => event.id === selectedId);
   const errors = filtered.filter((event) => event.status === "error").length;
   const warnings = filtered.filter((event) => event.status === "warning").length;
+  const healthy = Math.max(0, filtered.length - errors - warnings);
+  const sessionCount = new Set(filtered.map((event) => event.sessionId)).size;
   const duration = filtered.reduce((sum, event) => sum + event.duration, 0);
+  const activityBars = useMemo(() => {
+    const buckets = Array.from({ length: 14 }, () => 0);
+    filtered.forEach((event) => {
+      const ratio = Math.max(0, Math.min(.999, (event.timestamp - start) / range));
+      buckets[Math.floor(ratio * buckets.length)] += 1;
+    });
+    const peak = Math.max(...buckets, 1);
+    return buckets.map((value) => Math.max(8, Math.round(value / peak * 100)));
+  }, [filtered, range, start]);
   const tick = (ratio: number) => formatTimelineOffset(range * ratio);
+  const bufferLabel = filtered.length ? `${filtered.length.toLocaleString()} signals · ${formatTimelineOffset(range)} window` : "Waiting for telemetry";
   return (
-    <PanelFrame eyebrow="Observatory / All telemetry" title="Global Telemetry Timeline" description="Chronological signals across Internet, Browser, System and runtime diagnostics.">
+    <PanelFrame className="timeline-workspace" eyebrow="Observatory / All telemetry" title="Global Timeline" description="Normalized telemetry signals across browser, runtime and network, in chronological order." actions={<div className="timeline-header-actions"><LivePill /><span>{bufferLabel}</span></div>}>
       <section className="global-timeline-summary">
-        <article><span>Visible events</span><strong>{filtered.length.toLocaleString()}</strong><small>of {events.length.toLocaleString()} buffered</small></article>
-        <article><span>Total event duration</span><strong>{formatDuration(duration)}</strong><small>{formatTimelineOffset(range)} time range</small></article>
-        <article><span>Errors</span><strong className={errors ? "status-text--error" : "status-text--ok"}>{errors}</strong><small>{warnings} warnings</small></article>
-        <article><span>Sessions</span><strong>{new Set(filtered.map((event) => event.sessionId)).size}</strong><small>{lanes.length} active subsystems</small></article>
+        <article className="timeline-stat-card"><div><span>Visible events</span><small>of {events.length.toLocaleString()} buffered</small></div><strong>{filtered.length.toLocaleString()}</strong><div className="timeline-stat-spark" aria-hidden="true">{activityBars.map((height, index) => <i key={index} style={{ height: `${height}%` }} />)}</div></article>
+        <article className="timeline-stat-card"><div><span>Total duration</span><small>{formatTimelineOffset(range)} time range</small></div><strong>{formatDuration(duration)}</strong><div className="timeline-stat-spark" aria-hidden="true">{activityBars.map((height, index) => <i key={index} style={{ height: `${Math.max(10, 100 - height / 2)}%` }} />)}</div></article>
+        <article className={`timeline-stat-card${errors ? " timeline-stat-card--error" : ""}`}><div><span>Errors</span><small>{warnings} warnings</small></div><strong className={errors ? "status-text--error" : "status-text--ok"}>{errors}</strong><div className="timeline-stat-spark timeline-stat-spark--error" aria-hidden="true">{activityBars.map((height, index) => <i key={index} style={{ height: `${errors ? Math.max(12, height * (index % 3 === 0 ? 1 : .45)) : 10}%` }} />)}</div></article>
+        <article className="timeline-stat-card"><div><span>Sessions</span><small>{lanes.length} active subsystems</small></div><strong>{sessionCount}</strong><div className="timeline-stat-spark" aria-hidden="true">{activityBars.map((height, index) => <i key={index} style={{ height: `${Math.max(12, height * .8)}%` }} />)}</div></article>
       </section>
       <section className="global-timeline-filters" aria-label="Timeline filters">
         <label><span>Search</span><input className="search-input" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Event, URL, stage or session…"/></label>
@@ -345,6 +356,7 @@ export function TimelinePanel() {
         <button type="button" onClick={() => { setQuery(""); setKind("all"); setStatus("all"); setJourney("all"); setSession("all"); }}>Reset</button>
       </section>
       <div className="timeline-shell">
+        <div className="timeline-shell__topline"><strong>Signal density</strong><div className="timeline-legend"><span><i className="timeline-legend__dot timeline-legend__dot--ok" />OK {healthy.toLocaleString()}</span><span><i className="timeline-legend__dot timeline-legend__dot--warning" />Warning {warnings.toLocaleString()}</span><span><i className="timeline-legend__dot timeline-legend__dot--error" />Error {errors.toLocaleString()}</span></div></div>
         <div className="timeline-ruler">
           {[0, .2, .4, .6, .8, 1].map((ratio) => <span key={ratio}>{tick(ratio)}</span>)}
         </div>
@@ -370,7 +382,7 @@ export function TimelinePanel() {
         </div>
       </div>
       <div className="global-timeline-layout">
-        <section className="panel-card global-timeline-events"><header><strong>Chronological events</strong><span>{filtered.length} matching signals</span></header><div className="event-table" role="table"><div className="event-row event-row--header" role="row"><span>Signal</span><span>Journey / kind</span><span>Time</span><span>Duration</span><span>Status</span></div>{filtered.length ? [...filtered].reverse().slice(0, 250).map((event) => <button type="button" className={`event-row global-event-row ${selectedId === event.id ? "global-event-row--selected" : ""}`} role="row" key={event.id} onClick={() => select(event.id)}><span><i className={`event-dot event-dot--${event.status}`}/>{event.name}</span><span><b>{classifyJourney(event)}</b><small>{event.kind}</small></span><span className="mono">+{formatTimelineOffset(event.timestamp-start)}</span><span className="mono">{event.duration.toFixed(3)} ms</span><span className={`status-text status-text--${event.status}`}>{event.status}</span></button>) : <div className="empty-row">No matching events.</div>}</div></section>
+        <section className="panel-card global-timeline-events"><header><div><strong>Chronological events</strong><small>Latest signals first</small></div><span>{filtered.length.toLocaleString()} matching signals</span></header><div className="event-table" role="table"><div className="event-row event-row--header" role="row"><span>Signal</span><span>Journey / kind</span><span>Time</span><span>Duration</span><span>Status</span><span>Session</span></div>{filtered.length ? [...filtered].reverse().slice(0, 250).map((event) => <button type="button" className={`event-row global-event-row ${selectedId === event.id ? "global-event-row--selected" : ""}`} role="row" key={event.id} onClick={() => select(event.id)}><span><i className={`event-dot event-dot--${event.status}`}/>{event.name}</span><span><b>{classifyJourney(event)}</b><small>{event.kind}</small></span><span className="mono">+{formatTimelineOffset(event.timestamp-start)}</span><span className="mono">{event.duration.toFixed(3)} ms</span><span className={`status-text status-text--${event.status}`}>{event.status}</span><span className="mono timeline-session">{event.sessionId}</span></button>) : <div className="empty-row">No matching events.</div>}</div></section>
         <aside className="panel-card global-timeline-detail">{selected ? <TimelineEventDetails event={selected} onClose={() => select(undefined)}/> : <div className="global-timeline-detail__empty"><CircleDot size={20}/><strong>Select an event</strong><span>Inspect timing, ownership, journey classification, relationships and the complete typed payload.</span></div>}</aside>
       </div>
     </PanelFrame>
@@ -824,21 +836,16 @@ export function NetworkPanel() {
   }, []);
   const visible = useMemo(() => requests.filter((request) => {
     const text = `${request.url} ${request.method} ${request.protocol} ${request.remoteIp} ${request.statusCode ?? ""} ${request.terminalStatus} ${request.executionId}`.toLowerCase();
-    const typeMatch = typeFilter === "all" || (() => {
-      const resourceType = (request.resourceType ?? "").toLowerCase();
-      const ct = (request.contentType ?? "").toLowerCase();
-      if (typeFilter === "xhr") return resourceType === "xhr" || resourceType === "fetch" || ct.includes("json") || ct.includes("xml") || request.method !== "GET";
-      if (typeFilter === "script") return resourceType === "script" || resourceType === "worker" || ct.includes("javascript") || ct.includes("script") || request.url.endsWith(".js");
-      if (typeFilter === "doc") return resourceType === "document" || ct.includes("html") || ct.includes("text/plain");
-      if (typeFilter === "css") return resourceType === "stylesheet" || ct.includes("css");
-      if (typeFilter === "media") return ["image", "media", "font"].includes(resourceType) || ct.includes("image") || ct.includes("video") || ct.includes("audio") || ct.includes("font");
-      return true;
-    })();
-    return (!filter || text.includes(filter.toLowerCase())) && (status === "all" || request.terminalStatus === status) && (execution === "all" || request.executionId === execution) && typeMatch;
+    const typeMatch = matchesNetworkType(typeFilter, request);
+    const statusMatch = status === "all" || (status === "error" ? request.failed : !request.failed);
+    return (!filter || text.includes(filter.toLowerCase())) && statusMatch && (execution === "all" || request.executionId === execution) && typeMatch;
   }), [execution, filter, requests, status, typeFilter]);
   const selected = visible.find((request) => request.key === selectedKey) ?? visible[0];
-  const errorCount = requests.filter((request) => request.terminalStatus === "error").length;
-  const bytes = requests.reduce((sum, request) => sum + (request.responseBytes ?? 0), 0);
+  const errorCount = requests.filter((request) => request.failed).length;
+  const decodedKnown = requests.filter((request) => request.decodedBytes != null);
+  const decodedBytes = decodedKnown.reduce((sum, request) => sum + (request.decodedBytes ?? 0), 0);
+  const transferredKnown = requests.some((request) => request.transferredBytes != null);
+  const transferredBytes = requests.reduce((sum, request) => sum + (request.transferredBytes ?? 0), 0);
   const connections = new Set(requests.flatMap((request) => request.connectionId == null ? [] : [request.connectionId])).size;
   const protocols = [...new Set(requests.flatMap((request) => request.protocol === "Unavailable" ? [] : [request.protocol]))];
   const TYPE_TABS = [["all", "All"], ["xhr", "Fetch/XHR"], ["doc", "Doc"], ["script", "JS"], ["css", "CSS"], ["media", "Media"]] as const;
@@ -847,7 +854,7 @@ export function NetworkPanel() {
       <section className="network-summary">
         <article><span>Transfers</span><strong>{requests.length.toLocaleString()}</strong><small>{visible.length} visible</small></article>
         <article><span>Failed</span><strong className={errorCount ? "status-text--error" : "status-text--ok"}>{errorCount}</strong><small>{requests.length ? `${(errorCount / requests.length * 100).toFixed(1)}% error rate` : "No transfers"}</small></article>
-        <article><span>Response bytes</span><strong>{bytes == null ? "Unavailable" : formatBytes(bytes)}</strong><small>Observed body bytes</small></article>
+        <article><span>Decoded body</span><strong>{decodedKnown.length ? formatBytes(decodedBytes) : "Unavailable"}</strong><small>{requests.length - decodedKnown.length ? `${requests.length - decodedKnown.length} without a decoded size · ` : ""}{transferredKnown ? `Transferred ${formatBytes(transferredBytes)}` : "Transferred unavailable"}</small></article>
         <article><span>Connections</span><strong>{connections || "Unavailable"}</strong><small>Unique connection IDs</small></article>
         <article><span>Protocols</span><strong>{protocols.join(", ") || "Unavailable"}</strong><small>Observed HTTP versions</small></article>
       </section>
@@ -875,7 +882,7 @@ export function NetworkPanel() {
           </div>
           <div className="network-pending-fields">
             <span>Required for request list</span>
-            <code>url · method · httpVersion · primaryIp · connectionId · responseStatus · responseBodyBytes</code>
+            <code>url · method · httpVersion · primaryIp · connectionId · responseStatus · responseBodyBytes · uncompressedSizeBytes</code>
             <span>Required for Headers tab</span>
             <code>requestHeaders · responseHeaders · cacheControl · server · contentType</code>
             <span>Response body capture</span>
@@ -888,9 +895,9 @@ export function NetworkPanel() {
         <section className="network-request-list">
           <header><span>Name</span><span>Status</span><span>Protocol</span><span>Remote address</span><span>Size</span><span>Duration</span></header>
           <div>{visible.length ? visible.map((request) => <button key={request.key} className={selected?.key === request.key ? "active" : ""} onClick={() => setSelectedKey(request.key)}>
-            <span><i className={`event-dot event-dot--${request.terminalStatus === "error" ? "error" : "ok"}`}/><b>{request.method} · {request.resourceType ?? "Other"}</b><strong>{requestDisplayName(request.url)}</strong><small>{request.url}</small></span>
-            <span className={`status-text--${request.terminalStatus === "error" ? "error" : "ok"}`}>{request.statusCode ?? (request.terminalStatus === "error" ? "ERR" : "—")}</span>
-            <code>{request.protocol}</code><code>{request.remoteIp}</code><code>{formatOptionalBytes(request.responseBytes)}</code><code>{formatDuration(request.duration)}</code>
+            <span><i className={`event-dot event-dot--${request.failed ? "error" : "ok"}`}/><b>{request.method} · {request.resourceType ?? "Other"}</b><strong>{requestDisplayName(request.url)}</strong><small>{request.url}</small></span>
+            <span className={`status-text--${request.failed ? "error" : "ok"}`}>{request.statusCode ?? (request.transportFailed ? "ERR" : "—")}</span>
+            <code>{request.protocol}</code><code>{request.remoteIp}</code><NetworkSize request={request}/><code>{formatDuration(request.duration)}</code>
           </button>) : <div className="network-empty"><Wifi size={20}/><strong>{requests.length ? "No transfers match the current filters" : "Waiting for network telemetry"}</strong><span>{requests.length ? "Reset filters or search for a different URL." : "Inspect a URL to capture its transfer lifecycle."}</span></div>}</div>
         </section>
 
@@ -901,7 +908,7 @@ export function NetworkPanel() {
               <strong>{requestDisplayName(selected.url)}</strong>
               <small>{selected.url}</small>
             </div>
-            <b className={`status-text--${selected.terminalStatus === "error" ? "error" : "ok"}`}>{selected.statusCode ?? selected.terminalStatus}</b>
+            <b className={`status-text--${selected.failed ? "error" : "ok"}`}>{selected.statusCode ?? selected.terminalStatus}</b>
           </header>
           <nav>{(["overview", "timing", "headers", "payload", "response", "events"] as const).map((tab) => <button key={tab} className={detailTab === tab ? "active" : ""} onClick={() => setDetailTab(tab)}>{tab}</button>)}</nav>
           {detailTab === "overview" && <NetworkOverview request={selected} />}
@@ -916,24 +923,12 @@ export function NetworkPanel() {
   );
 }
 
-type NetworkRequest = ReturnType<typeof aggregateNetworkRequests>[number];
+type NetworkRequest = NetworkRequestSummary;
 
-function aggregateNetworkRequests(events: TelemetryEvent[]) {
-  return groupNetworkTransfers(events).map(({ key, events: grouped, duration: measuredDuration }) => {
-    const ordered = [...grouped].sort((a, b) => networkStageOrder.indexOf(String(a.payload.journeyStage ?? a.name)) - networkStageOrder.indexOf(String(b.payload.journeyStage ?? b.name)));
-    const terminal = [...ordered].reverse().find((event) => event.payload.terminalStatus != null || event.payload.responseStatus != null) ?? ordered.at(-1)!;
-    const payload = terminal.payload;
-    const statusEvent = ordered.find((event) => event.status === "error");
-    return { key, events: ordered, sessionId: terminal.sessionId, executionId: executionIdFor(terminal), inspectionId: String(payload.inspectionId ?? "Unavailable"), url: String(payload.url ?? payload.requestedUrl ?? "Unavailable"), method: String(payload.method ?? "GET"), resourceType: payloadString(payload, "resourceType"), requestId: typeof payload.requestId === "number" ? payload.requestId : undefined, frameId: typeof payload.frameId === "number" ? payload.frameId : undefined, loaderId: typeof payload.loaderId === "number" ? payload.loaderId : undefined, protocol: String(payload.httpVersion ?? "Unavailable"), remoteIp: String(payload.primaryIp ?? "Unavailable"), connectionId: payload.connectionId == null ? undefined : String(payload.connectionId), statusCode: typeof payload.responseStatus === "number" && payload.responseStatus > 0 ? payload.responseStatus : undefined, responseBytes: latestPayloadNumber(ordered, "responseBodyBytes"), duration: measuredDuration, terminalStatus: statusEvent || payload.terminalStatus === "error" ? "error" : "ok", connectionReused: payload.connectionReused === true, usedProxy: payload.usedProxy === true, redirectCount: typeof payload.redirectCount === "number" ? payload.redirectCount : undefined, contentType: payloadString(payload, "contentType"), contentEncoding: payloadString(payload, "contentEncoding"), cacheDecision: payloadString(payload, "cacheDecision"),
-      requestHeaders: payloadString(payload, "requestHeaders"),
-      responseHeaders: payloadString(payload, "responseHeaders"),
-      requestBody: transferField(ordered, "requestBody") ?? payloadString(payload, "postData"),
-      responseBody: transferField(ordered, "responseBody"),
-      headers: { "Cache-Control": payloadString(payload, "cacheControl"), Server: payloadString(payload, "server"), Age: payloadString(payload, "age"), Via: payloadString(payload, "via"), ETag: payloadString(payload, "etag") }, failure: statusEvent ? String(statusEvent.payload.error ?? statusEvent.payload.errorMessage ?? statusEvent.payload.failureReason ?? "Network operation failed") : undefined };
-  }).sort((a, b) => (b.events.at(-1)?.timestamp ?? 0) - (a.events.at(-1)?.timestamp ?? 0));
+function NetworkOverview({ request }: { request: NetworkRequest }) {
+  const reuse = request.connectionReused === "yes" ? "Yes" : request.connectionReused === "no" ? "No" : "Unavailable";
+  return <div className="network-detail-grid"><NetworkFact label="Request method" value={request.method}/><NetworkFact label="Response status" value={request.statusCode == null ? "Unavailable" : String(request.statusCode)}/><NetworkFact label="Remote address" value={request.remoteIp}/><NetworkFact label="Connection" value={request.connectionId ?? "Unavailable"}/><NetworkFact label="Connection reused" value={reuse}/><NetworkFact label="Proxy used" value={request.usedProxy ? "Yes" : "No"}/><NetworkFact label="Redirects" value={request.redirectCount == null ? "Unavailable" : String(request.redirectCount)}/><NetworkFact label="Request ID" value={request.requestId == null ? "Unavailable" : String(request.requestId)}/><NetworkFact label="Koko cache decision" value={request.cacheDecision ?? "Unavailable"}/><NetworkFact label="Cache headers" value={request.cacheHeaders}/><NetworkFact label="Content type" value={request.contentType ?? "Unavailable"}/><NetworkFact label="Content encoding" value={request.contentEncoding ?? "Unavailable"}/><NetworkFact label="Transferred" value={formatOptionalBytes(request.transferredBytes)}/><NetworkFact label="Decoded body" value={formatOptionalBytes(request.decodedBytes)}/><NetworkFact label="Execution" value={request.executionId}/>{request.transportFailed && <div className="network-failure"><AlertTriangle size={15}/><span><strong>Transfer failed</strong><small>{request.failure ?? "Network operation failed"}</small></span></div>}{request.httpError && !request.transportFailed && <div className="network-failure"><AlertTriangle size={15}/><span><strong>HTTP error status</strong><small>The transfer completed and the server returned this status.</small></span></div>}</div>;
 }
-
-function NetworkOverview({ request }: { request: NetworkRequest }) { return <div className="network-detail-grid"><NetworkFact label="Request method" value={request.method}/><NetworkFact label="Response status" value={request.statusCode == null ? "Unavailable" : String(request.statusCode)}/><NetworkFact label="Remote address" value={request.remoteIp}/><NetworkFact label="Connection" value={request.connectionId ?? "Unavailable"}/><NetworkFact label="Connection reused" value={request.connectionReused ? "Yes" : "No / unavailable"}/><NetworkFact label="Proxy used" value={request.usedProxy ? "Yes" : "No"}/><NetworkFact label="Redirects" value={request.redirectCount == null ? "Unavailable" : String(request.redirectCount)}/><NetworkFact label="Cache decision" value={request.cacheDecision ?? "Unavailable"}/><NetworkFact label="Content type" value={request.contentType ?? "Unavailable"}/><NetworkFact label="Content encoding" value={request.contentEncoding ?? "Unavailable"}/><NetworkFact label="Response bytes" value={formatOptionalBytes(request.responseBytes)}/><NetworkFact label="Execution" value={request.executionId}/>{request.failure && <div className="network-failure"><AlertTriangle size={15}/><span><strong>Transfer failed</strong><small>{request.failure}</small></span></div>}</div>; }
 
 function NetworkTiming({ request }: { request: NetworkRequest }) { const max = Math.max(...request.events.filter(isMeasuredEvent).map((event) => event.duration), 1); return <div className="network-timing">{networkStageOrder.map((stage) => { const event = request.events.find((candidate) => String(candidate.payload.journeyStage ?? candidate.name) === stage); const measurement = String(event?.payload.measurement ?? "unavailable"); const measured = event && isMeasuredEvent(event); return <div key={stage} className={`network-timing__row network-timing__row--${event?.status ?? "missing"}`}><span>{stage}</span><div><i style={{ width: measured ? `${Math.max(2, event.duration / max * 100)}%` : "2%" }}/></div><strong>{!event ? "Not emitted" : measurement === "boundary" ? "Boundary" : measurement === "reused" ? "Reused" : measured ? `${event.duration.toFixed(3)} ms` : measurement}</strong></div>; })}<footer><span>Total measured stage duration</span><strong>{formatDuration(request.duration)}</strong></footer></div>; }
 
@@ -1002,7 +997,7 @@ function NetworkResponse({ request }: { request: NetworkRequest }) {
       {body ? (
         <>
           <div className="network-payload__meta">
-            <span>Response body · {body.length} chars · {request.contentType ?? "unknown type"}</span>
+            <span>Response body · {request.decodedBytes == null ? `${utf8ByteLength(body)} B captured` : `decoded ${formatBytes(request.decodedBytes)}`}{request.transferredBytes == null ? "" : ` · transferred ${formatBytes(request.transferredBytes)}`}{request.bodyTruncated ? " · capture truncated" : ""} · {request.contentType ?? "unknown type"}</span>
             {isJson && <span className="network-payload__type">JSON</span>}
             {isText && !isJson && <span className="network-payload__type">text</span>}
           </div>
@@ -1021,9 +1016,10 @@ function NetworkResponse({ request }: { request: NetworkRequest }) {
 
 function NetworkEvents({ request }: { request: NetworkRequest }) { return <div className="network-raw-events">{request.events.map((event) => <details key={event.id}><summary><span className={`status-text--${event.status}`}>{event.status}</span><strong>{event.name}</strong><code>#{event.sequence}</code><small>{event.duration.toFixed(3)} ms</small></summary><pre>{JSON.stringify(event, null, 2)}</pre></details>)}</div>; }
 function NetworkFact({ label, value }: { label: string; value: string }) { return <div><small>{label}</small><strong>{value}</strong></div>; }
-function latestPayloadNumber(events: TelemetryEvent[], key: string) { for (let index = events.length - 1; index >= 0; index--) { const value = events[index].payload[key]; if (typeof value === "number" && Number.isFinite(value)) return value; } return undefined; }
-function payloadString(payload: Record<string, unknown>, key: string) { const value = payload[key]; return typeof value === "string" && value.length ? value : undefined; }
-function transferField(events: TelemetryEvent[], key: string) { for (const event of events) { const value = payloadString(event.payload, key); if (value) return value; } return undefined; }
+function NetworkSize({ request }: { request: NetworkRequest }) {
+  const same = request.decodedBytes != null && request.transferredBytes != null && request.decodedBytes === request.transferredBytes;
+  return <span className="network-size"><b>{request.decodedBytes == null ? "—" : formatBytes(request.decodedBytes)}</b><small>{request.transferredBytes == null ? "Wire unavailable" : same ? "Same on the wire" : `Wire ${formatBytes(request.transferredBytes)}`}</small></span>;
+}
 function requestDisplayName(url: string) { try { const parsed = new URL(url); return `${parsed.hostname}${parsed.pathname}`; } catch { return url; } }
 function formatOptionalBytes(value?: number) { return value == null ? "Unavailable" : formatBytes(value); }
 
@@ -1114,7 +1110,7 @@ function TimelineEventDetails({ event, onClose }: { event: ReturnType<typeof use
   const owner = event.payload.processName ?? event.payload.processId ?? "Unavailable";
   const thread = event.payload.threadName ?? event.payload.thread ?? event.payload.threadId ?? "Unavailable";
   return <div className="timeline-event-detail">
-    <header><div><small>{classifyJourney(event)} · {event.kind}</small><strong>{event.name}</strong></div><button type="button" onClick={onClose}>Close</button></header>
+    <header><div><small>Event detail · {classifyJourney(event)} / {event.kind}</small><strong>{event.name}</strong></div><div className="timeline-event-detail__actions"><span className={`timeline-event-status timeline-event-status--${event.status}`}>{event.status}</span><button type="button" onClick={onClose} aria-label="Close event detail"><X size={14}/></button></div></header>
     <div className="timeline-event-detail__metrics">
       <span><small>Status</small><b className={`status-text--${event.status}`}>{event.status}</b></span>
       <span><small>Duration</small><b>{event.duration.toFixed(3)} ms</b></span>

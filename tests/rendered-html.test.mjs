@@ -54,8 +54,10 @@ test("Overview derives operational metrics from telemetry", async () => {
   assert.doesNotMatch(panels, /\[2,4,3,7,5,9,8,12,10,14\]/);
   assert.doesNotMatch(panels, /No crash signal|512 \* 1024 \* 1024|50_000/);
   assert.doesNotMatch(worker, /3\.57|MAX_EVENTS = 1_000_000/);
-  assert.match(worker, /rebuildRates/);
-  assert.match(worker, /isMeasuredEvent/);
+  assert.match(worker, /createEventRateLedger/);
+  assert.match(worker, /createMeasuredDurationWindow/);
+  assert.match(worker, /rateLedger\.snapshot/);
+  assert.match(worker, /durationWindow\.percentile/);
   assert.match(bridge, /emitInspectionState\("started"\)/);
   assert.match(bridge, /emitInspectionState\("completed"\)/);
   assert.match(bridge, /emitInspectionState\("failed"/);

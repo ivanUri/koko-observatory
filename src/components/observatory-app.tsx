@@ -74,7 +74,10 @@ function ObservatoryRuntime({ initialPlugin }: { initialPlugin: string }) {
   useEffect(() => {
     let cancelled = false;
     void Promise.all([loadRecentExecutionEvents(), countStoredExecutionEvents()]).then(([events, persistedTotal]) => {
-      if (!cancelled) useTelemetryStore.getState().hydrate(events, persistedTotal);
+      if (cancelled) return;
+      useTelemetryStore.getState().hydrate(events, persistedTotal);
+      // The store reads phase again and ignores this once an inspect is already running.
+      useInternetJourneyStore.getState().showStoredInspection(events);
     }).catch(() => undefined);
     return () => { cancelled = true; };
   }, []);

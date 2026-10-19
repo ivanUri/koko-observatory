@@ -1,5 +1,5 @@
-import type { TelemetryEvent } from "@/src/core/types";
-import { isMeasuredEvent } from "@/src/core/metrics";
+import type { TelemetryEvent } from "../../core/types.ts";
+import { isMeasuredEvent } from "../../core/metrics.ts";
 
 export type MeasurementState = "measured" | "estimated" | "derived" | "reused" | "cached" | "below-resolution" | "unavailable" | "not-applicable" | "error";
 export interface BrowserSpan { id: string; stage: string; start: number; duration: number; thread: string; process: string; state: MeasurementState; event: TelemetryEvent; }

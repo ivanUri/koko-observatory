@@ -243,7 +243,15 @@ async function startAutomationSession(command) {
     });
     await automationRpc({ jsonrpc: "2.0", method: "notifications/initialized", params: {} }, initialized.sessionId);
     automationSession = { id, child, dataDirectory, sessionId: initialized.sessionId, url: "", title: "" };
-    emitAutomationEvent("automation-session-started", "ok", { sessionId: id, ...(await automationSnapshot()) });
+    // A newly initialized MCP session has no page yet. Discovery APIs require
+    // currentFrame(), so only take a snapshot after the first navigation.
+    emitAutomationEvent("automation-session-started", "ok", {
+      sessionId: id,
+      url: "",
+      title: "",
+      elements: [],
+      snapshot: "",
+    });
     if (typeof command.url === "string" && command.url.trim()) {
       await automationCall("goto", { url: command.url.trim(), waitUntil: command.waitUntil ?? "domcontentloaded", timeout: command.timeoutMs ?? 30_000 });
       const state = await automationSnapshot();
@@ -457,7 +465,11 @@ async function automationRpc(body, sessionId, method = "POST") {
     ...(body ? { body: JSON.stringify(body) } : {}),
   });
   const assignedSessionId = response.headers.get("mcp-session-id") ?? sessionId;
-  if (response.status === 204) return { sessionId: assignedSessionId, result: undefined };
+  // JSON-RPC notifications do not have a response body. Koko's MCP transport
+  // acknowledges them with 202, while session deletion uses 204.
+  if (response.status === 202 || response.status === 204) {
+    return { sessionId: assignedSessionId, result: undefined };
+  }
   const raw = await response.text();
   let parsed;
   try { parsed = JSON.parse(raw); } catch { throw new Error(`MCP returned invalid JSON (${response.status})`); }

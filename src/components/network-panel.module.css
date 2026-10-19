@@ -59,6 +59,11 @@
   font-size: 10px !important;
 }
 
+.networkPage :global(.network-size b),
+.networkPage :global(.network-size small) {
+  font-size: 10px !important;
+}
+
 .networkPage :global(.network-empty strong) {
   font-size: 12px !important;
 }

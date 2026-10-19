@@ -1,10 +1,12 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef } from "react";
+import Link from "next/link";
 import { Background, BaseEdge, Controls, Handle, MarkerType, Position, ReactFlow, getStraightPath, type EdgeProps, type NodeProps } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { ChevronDown, ChevronLeft, ChevronRight, Circle, CircleHelp, Globe2, Pause, Play, Search } from "lucide-react";
 import { internetJourneyEdges, internetJourneyNodes } from "./data";
+import { absentStageLabel, waterfallReading } from "./project";
 import { useInternetJourneyStore } from "./store";
 import type { JourneyNode } from "./types";
 import styles from "./internet-journey-panel.module.css";
@@ -17,6 +19,8 @@ const nodeTypes = { journey: JourneyCard };
 const edgeTypes = { journey: JourneyEdge };
 
 export function journeyDurationLabel(model: JourneyNode): string {
+  const absent = absentStageLabel(model);
+  if (absent) return absent;
   if (model.status === "pending") return "—";
   if (model.status === "error") return "Failed";
   if (model.status === "skipped") return "Skipped";
@@ -29,6 +33,9 @@ export function journeyDurationLabel(model: JourneyNode): string {
 }
 
 function measurementHint(model: JourneyNode): string {
+  const absent = absentStageLabel(model);
+  if (absent === "No redirect") return "The response completed without an HTTP redirect.";
+  if (absent === "No proxy") return "The request did not use an HTTP proxy or CONNECT tunnel.";
   if (model.metadata.measurement === "not-timed") return "The stage exists, but core does not attach a duration source yet.";
   if (model.metadata.measurement === "unavailable") return "The browser or network layer cannot observe this signal.";
   if (model.metadata.measurement === "reused") return "Connection reused, so the browser did not remeasure this phase.";
@@ -45,13 +52,13 @@ function developerDetails(model: JourneyNode) {
   }
   const fieldMap: Record<string, string[]> = {
     "url-input": ["url"], "url-parse": ["url"], queue: ["journeyStage", "measurement"],
-    cache: ["cacheDecision", "responseStatus", "etag", "age"], dns: ["primaryIp", "measurement"],
+    cache: ["cacheDecision", "responseStatus", "etag", "age", "responseHeaders"], dns: ["primaryIp", "measurement"],
     routing: ["primaryIp", "usedProxy"], proxy: ["usedProxy", "primaryIp"],
     tcp: ["primaryIp", "connectionId", "numConnects", "connectionReused"],
     tls: ["httpVersion", "connectionId", "connectionReused"],
-    request: ["method", "url", "redirectCount", "httpVersion"], redirect: ["redirectCount", "url"],
+    request: ["method", "url", "redirectCount", "httpVersion", "requestHeaders"], redirect: ["redirectCount", "url"],
     server: ["responseStatus", "server", "via", "httpVersion"],
-    response: ["responseStatus", "responseBodyBytes", "compressedSizeBytes", "uncompressedSizeBytes", "contentType", "contentEncoding", "cacheControl", "server", "etag"],
+    response: ["responseStatus", "responseBodyBytes", "compressedSizeBytes", "uncompressedSizeBytes", "contentType", "contentEncoding", "cacheControl", "server", "etag", "responseHeaders"],
     received: ["responseStatus", "responseBodyBytes", "responseMemoryBytes", "responseMemoryState"],
   };
   const event = rawEvent && typeof rawEvent === "object" && "event" in rawEvent ? (rawEvent as { event?: unknown }).event : undefined;
@@ -79,11 +86,11 @@ function developerDetails(model: JourneyNode) {
 }
 
 function JourneyCard({ data }: NodeProps) {
-  const model = data as unknown as JourneyNode;
+  const model = data as unknown as JourneyNode & { highlighted?: boolean };
   const expanded = useInternetJourneyStore((state) => state.expanded === model.id);
   const toggle = useInternetJourneyStore((state) => state.toggle);
   const mode = useInternetJourneyStore((state) => state.mode);
-  return <article className={`journey-node journey-node--${model.status}`}>
+  return <article className={`journey-node journey-node--${model.status}${model.highlighted ? " journey-node--cursor" : ""}`}>
     <Handle type="target" position={Position.Left} />
     <button className="journey-node__summary" onClick={() => toggle(model.id)}>
       <span className="journey-node__icon">{typeIcons[model.type]}</span>
@@ -95,9 +102,9 @@ function JourneyCard({ data }: NodeProps) {
       <div className="journey-kv">{model.metadata.summary.map((item) => <span key={item.label}><small>{item.label}</small><code>{item.value}</code></span>)}</div>
       {mode === "education" ? <>
         <h4><CircleHelp size={12} /> What is this?</h4><p>{model.metadata.explanation}</p>
-        <h4>Common issues</h4><p>{model.metadata.issues.join(" ")}</p>
-        <h4>Best practices</h4><p>{model.metadata.practices.join(" ")}</p>
-        <a>{model.metadata.reference}</a>
+        {model.metadata.issues.length > 0 && <><h4>Not included</h4><p>{model.metadata.issues.join(" ")}</p></>}
+        {model.metadata.practices.length > 0 && <><h4>Best practices</h4><p>{model.metadata.practices.join(" ")}</p></>}
+        <span className="journey-reference">{model.metadata.reference}</span>
       </> : <>
         <h4>Stage diagnostics</h4>
         <pre>{developerDetails(model)}</pre>
@@ -132,7 +139,8 @@ function JourneyEdge(props: EdgeProps) {
 }
 
 export function InternetJourneyPanel() {
-  const { cursor, playing, speed, mode, query, phase, recording, recordedEvents, revealedCount, nodes: liveNodes, play, seek, setSpeed, setMode, setQuery, toggleRecording, revealNext } = useInternetJourneyStore();
+  const { cursor, playing, speed, mode, query, phase, recording, recordedEvents, revealedCount, executionId, otherTransfers, nodes: liveNodes, play, seek, setSpeed, setMode, setQuery, toggleRecording, revealNext } = useInternetJourneyStore();
+  const transferCount = otherTransfers?.length ?? 0;
   const journeyNodes = liveNodes.length ? liveNodes : internetJourneyNodes;
   const positions = useRef<Record<string, { x: number; y: number }>>({});
   useEffect(() => {
@@ -156,26 +164,26 @@ export function InternetJourneyPanel() {
   const nodes = useMemo(() => visible.map((node) => {
     const index = journeyNodes.findIndex((candidate) => candidate.id === node.id);
     return {
-      id: node.id, type: "journey", data: { ...node, status: playing ? (index < cursor ? "complete" : index === cursor ? "active" : "pending") : node.status },
+      id: node.id, type: "journey", data: { ...node, highlighted: playing && index === cursor },
       position: positions.current[node.id] ?? { x: index * 330, y: 30 },
     };
   }), [visible, journeyNodes, cursor, playing]);
   const edges = useMemo(() => {
     const visibleIds = new Set(visible.map((node) => node.id));
-    return internetJourneyEdges.filter((edge) => visibleIds.has(edge.source) && visibleIds.has(edge.target)).map((edge, index) => {
+    return internetJourneyEdges.filter((edge) => visibleIds.has(edge.source) && visibleIds.has(edge.target)).map((edge) => {
       const source = journeyNodes.find((node) => node.id === edge.source);
       const target = journeyNodes.find((node) => node.id === edge.target);
       const failed = source?.status === "error" || target?.status === "error";
       const skipped = !failed && (source?.status === "skipped" || target?.status === "skipped");
       const traversed = (status?: JourneyNode["status"]) => status === "complete" || status === "unavailable";
-      const connected = !failed && !skipped && (index < cursor || (traversed(source?.status) && traversed(target?.status)));
+      const connected = !failed && !skipped && traversed(source?.status) && traversed(target?.status);
       const state = failed ? "failed" : skipped ? "skipped" : connected ? "connected" : "pending";
       const color = state === "connected" ? "#55d57d" : state === "failed" ? "#ef6f78" : state === "skipped" ? "#704149" : "#34404b";
       return {
         ...edge, type: "journey", data: { state }, animated: connected, markerEnd: { type: MarkerType.ArrowClosed, color, width: 14, height: 14 },
       };
     });
-  }, [visible, journeyNodes, cursor]);
+  }, [visible, journeyNodes]);
   const durations = useMemo(() => [
     ["Queue", journeyNodes.find((node) => node.id === "queue")],
     ["DNS", journeyNodes.find((node) => node.id === "dns")],
@@ -186,6 +194,10 @@ export function InternetJourneyPanel() {
     ["Transfer", journeyNodes.find((node) => node.id === "response")],
   ] as const, [journeyNodes]);
   const totalDuration = durations.reduce((total, [, node]) => total + (node?.status === "complete" && node.metadata.measurement === "measured" ? node.duration : 0), 0);
+  const reading = useMemo(() => waterfallReading(journeyNodes), [journeyNodes]);
+  const explained = useMemo(() => journeyNodes.slice(0, revealedCount).filter((node) => node.metadata.estimated === false && (
+    !query || `${node.title} ${node.metadata.explanation} ${node.metadata.issues.join(" ")}`.toLowerCase().includes(query.toLowerCase())
+  )), [journeyNodes, query, revealedCount]);
   const failedNode = journeyNodes.find((node) => node.status === "error");
   const onNodeDragStop = useCallback((_: unknown, node: { id: string; position: { x: number; y: number } }) => {
     positions.current[node.id] = node.position;
@@ -208,13 +220,16 @@ export function InternetJourneyPanel() {
       </div>
     </div>
     {phase === "idle" ? <section className="journey-empty"><Globe2 size={22} /><strong>Inspect an Internet journey</strong><span>Enter a URL above to launch Koko and reveal each measured network step.</span></section> : <>
+    {executionId ? <p className="journey-scope"><span>Top-level document only. {transferCount} other {transferCount === 1 ? "transfer" : "transfers"} in this inspection.</span><Link href={`/network?execution=${encodeURIComponent(executionId)}`}>Open Network</Link></p> : null}
     <section className={`journey-graph journey-graph--${phase}`}>
       <ReactFlow nodes={nodes} edges={edges} nodeTypes={nodeTypes} edgeTypes={edgeTypes} onNodeDragStop={onNodeDragStop} fitView minZoom={.3} maxZoom={1.3}><Background color="#23303b" gap={20} size={1} /><Controls /></ReactFlow>
     </section>
     <section className="journey-waterfall">
       <header><strong>Request waterfall</strong><span>Total <b>{totalDuration ? `${totalDuration.toFixed(3)} ms` : "Awaiting telemetry"}</b></span></header>
+      {reading ? <p className="journey-waterfall__reading">{reading}</p> : null}
       <div>{durations.map(([label, node]) => { const measured = node?.status === "complete" && node.metadata.measurement === "measured"; const value = measured ? node.duration : 0; const result = node?.status === "error" ? "Failed" : node?.status === "skipped" ? "Skipped" : node?.status === "unavailable" || node?.metadata.measurement === "unavailable" ? "Unavailable" : measured ? `${value.toFixed(3)} ms` : node?.metadata.measurement === "boundary" ? "Boundary" : "—"; return <span key={label} className={`journey-waterfall__row journey-waterfall__row--${node?.status ?? "pending"}`}><small>{label}</small><i style={{ width: `${totalDuration && value ? Math.max(2, value / totalDuration * 100) : 2}%` }} /><b>{result}</b></span>; })}</div>
     </section>
+    {explained.length > 0 && <section className="journey-reading"><header><strong>What the timings say</strong></header><div>{explained.map((node) => <p key={node.id}><strong>{node.title}</strong><span>{node.metadata.explanation}</span>{node.metadata.issues.length > 0 && <small>{node.metadata.issues.join(" ")}</small>}</p>)}</div></section>}
     {phase === "error" && <footer className="journey-boundary journey-boundary--error"><strong>Journey stopped at {failedNode?.title ?? "an unknown stage"}.</strong><span>{failedNode?.id === "url-input" ? "The URL is invalid, so the request was not sent." : `Previous stages completed, but ${failedNode?.title ?? "the network operation"} failed. Later stages were not reached.`} Open the failed node for diagnostics.</span></footer>}
     {phase === "received" && revealedCount >= journeyNodes.length && <footer className="journey-boundary"><strong>Response received.</strong><span>Internet Journey stops here — no HTML, CSS, JavaScript, DOM, rendering, Event Loop or GPU processing.</span><button onClick={() => { window.location.href = "/browser-journey"; }}>Continue → Browser Journey</button></footer>}
     </>}
