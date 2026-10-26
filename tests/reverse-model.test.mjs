@@ -22,17 +22,35 @@ test("reverse graph preserves observed evidence and links one request to its res
       actionId: "click-1",
       action: { action: "click", locator: { kind: "css", value: "button" } },
       evidence: [
-        { sequence: 1, timestamp: 1_001, kind: "dom-event", data: { eventType: "click", target: { tag: "button" } } },
-        { sequence: 2, timestamp: 1_002, kind: "event-listener-enter", data: { eventType: "click", listenerName: "onClick" } },
-        { sequence: 3, timestamp: 1_003, kind: "network-request", data: { requestId: "r1", method: "GET", url: "https://example.test/api" } },
-        { sequence: 4, timestamp: 1_004, kind: "network-response", data: { requestId: "r1", status: 200, url: "https://example.test/api" } },
+        { recordId: "p1", sequence: 1, timestamp: 1_001, kind: "dom-event", data: { eventType: "click", target: { tag: "button" }, recordId: "p1" } },
+        { recordId: "p2", parentRecordId: "p1", sequence: 2, timestamp: 1_002, kind: "event-listener-enter", data: { eventType: "click", listenerName: "onClick", recordId: "p2", parentRecordId: "p1" } },
+        { recordId: "p3", parentRecordId: "p2", sequence: 3, timestamp: 1_003, kind: "network-request", data: { requestId: "r1", method: "GET", url: "https://example.test/api", recordId: "p3", parentRecordId: "p2" } },
+        { recordId: "p4", parentRecordId: "p3", sequence: 4, timestamp: 1_004, kind: "network-response", data: { requestId: "r1", status: 200, url: "https://example.test/api", recordId: "p4", parentRecordId: "p3" } },
       ],
     }, 2),
   ]);
   assert.equal(trace.evidence.length, 4);
   assert.equal(trace.evidence.every((item) => item.evidenceClass === "OBSERVED"), true);
   assert.equal(trace.edges.some((edge) => edge.relation === "RECEIVES_RESPONSE" && edge.evidenceClass === "OBSERVED"), true);
-  assert.equal(trace.edges.some((edge) => edge.relation === "HANDLED_BY"), true);
+  assert.equal(trace.edges.some((edge) => edge.relation === "HANDLED_BY" && edge.evidenceClass === "OBSERVED"), true);
+  assert.equal(trace.edges.some((edge) => edge.relation === "INITIATES_REQUEST" && edge.evidenceClass === "OBSERVED"), true);
+});
+
+test("reverse graph does not join unrelated listeners by event type", () => {
+  const trace = buildReverseTrace([
+    event("reverse-session-started", { requestedUrl: "https://example.test" }, 1),
+    event("reverse-evidence-batch", {
+      actionId: "click-2",
+      evidence: [
+        { recordId: "event-a", kind: "dom-event", data: { eventType: "click", recordId: "event-a" } },
+        { recordId: "listener-a", parentRecordId: "event-a", kind: "event-listener-enter", data: { eventType: "click", listenerName: "a", recordId: "listener-a", parentRecordId: "event-a" } },
+        { recordId: "listener-b", kind: "event-listener-enter", data: { eventType: "click", listenerName: "b", recordId: "listener-b" } },
+      ],
+    }, 2),
+  ]);
+  const handled = trace.edges.filter((edge) => edge.relation === "HANDLED_BY");
+  assert.equal(handled.length, 1);
+  assert.match(handled[0].target, /listener-a/);
 });
 
 test("static analysis indexes functions, calls, imports and source-map positions", () => {

@@ -2,17 +2,20 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Background, Controls, Handle, MarkerType, Position, ReactFlow, type Edge, type Node, type NodeProps } from "@xyflow/react";
-import { ChevronLeft, ChevronRight, CircleDot, Cpu, Pause, Play } from "lucide-react";
+import { AlertTriangle, ArrowUpRight, CheckCircle2, ChevronLeft, ChevronRight, CircleDot, Cpu, Pause, Play, Search } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { browserJourneyNodes, observedBrowserJourneyEdges } from "./data";
 import { useBrowserJourneyStore } from "./store";
 import type { BrowserJourneyNode } from "./types";
+import { assessBrowserRuntime, combinePageLoadAssessments } from "./assessment";
 import { layoutBrowserFlow, type BrowserFlowData } from "./layout";
 import type { TelemetryEvent } from "@/src/core/types";
 import { isMeasuredEvent } from "@/src/core/metrics";
 import { observatoryBus } from "@/src/core/event-bus";
-import { useTelemetryStore } from "@/src/stores";
+import { useInternetJourneyStore } from "../internet/store";
+import { assessInternetJourney } from "../internet/project";
+import { useSelectionStore, useTelemetryStore } from "@/src/stores";
 
 function BrowserCard({ data }: NodeProps) {
   const item = data as unknown as BrowserFlowData;
@@ -50,6 +53,8 @@ export function BrowserJourneyPanel() {
   const [expandedIds, setExpandedIds] = useState<Set<string>>(() => new Set());
   const [flow, setFlow] = useState<{ nodes: Node[]; edges: Edge[] }>({ nodes: [], edges: [] });
   const { nodes: live, trace, cursor, playing, speed, revealed, phase, blockedReason, play, seek, setSpeed, reveal } = useBrowserJourneyStore();
+  const transportNodes = useInternetJourneyStore((state) => state.nodes);
+  const selectEvidence = useSelectionStore((state) => state.select);
   useEffect(() => {
     const ingest = (events: TelemetryEvent[]) => {
       if (events.length) useBrowserJourneyStore.getState().ingest(events);
@@ -77,6 +82,9 @@ export function BrowserJourneyPanel() {
   const toggleExpanded = useCallback((id: string) => setExpandedIds((current) => { const next = new Set(current); if (next.has(id)) next.delete(id); else next.add(id); return next; }), []);
   const visibleItems = useMemo(() => live.slice(0, revealed).map((item, index) => ({ ...item, status: playing ? (index < cursor ? "complete" as const : index === cursor ? "active" as const : "pending" as const) : item.status })), [live, revealed, cursor, playing]);
   const observedEdges = useMemo(() => observedBrowserJourneyEdges(trace.events), [trace.events]);
+  const transportAssessment = useMemo(() => assessInternetJourney(transportNodes), [transportNodes]);
+  const browserAssessment = useMemo(() => assessBrowserRuntime(trace.events), [trace.events]);
+  const pageAssessment = useMemo(() => combinePageLoadAssessments(transportAssessment, browserAssessment), [browserAssessment, transportAssessment]);
   const styledEdges = useMemo<Edge[]>(() => observedEdges.map((edge) => { const sourceIndex = live.findIndex((item) => item.id === edge.source); const traversed = sourceIndex >= 0 && sourceIndex < cursor; return { ...edge, animated: playing && traversed, markerEnd: { type: MarkerType.ArrowClosed, color: traversed ? "#55d57d" : "#34404b" }, style: { stroke: traversed ? "#55d57d" : "#34404b" } }; }), [live, observedEdges, cursor, playing]);
   useEffect(() => {
     let cancelled = false;
@@ -93,6 +101,20 @@ export function BrowserJourneyPanel() {
       <button onClick={() => seek(cursor - 1)}><ChevronLeft size={14}/></button><button onClick={() => play(!playing)}>{playing ? <Pause size={14}/> : <Play size={14}/>} {playing ? "Pause" : "Play"}</button><button onClick={() => seek(cursor + 1)}><ChevronRight size={14}/></button>
       {([.5, 1, 2] as const).map((value) => <button key={value} className={speed === value ? "active" : ""} onClick={() => setSpeed(value)}>×{value}</button>)}
     </div></div>
+    {phase !== "idle" && <section className={`journey-assessment browser-page-assessment journey-assessment--${pageAssessment.state}`}>
+      <div className="journey-assessment__icon">{pageAssessment.state === "attention" ? <AlertTriangle size={16} /> : pageAssessment.state === "healthy" ? <CheckCircle2 size={16} /> : <Search size={16} />}</div>
+      <div className="journey-assessment__body">
+        <span className="journey-assessment__eyebrow">Page-load assessment</span>
+        <strong>{pageAssessment.headline}</strong>
+        <p>{pageAssessment.summary}</p>
+        <div className="browser-page-assessment__layers">
+          <article><small>Internet Journey</small><b>{transportAssessment.headline}</b><span>{transportAssessment.value ?? transportAssessment.summary}</span><Link href="/internet-journey">Open transport evidence <ArrowUpRight size={11} /></Link></article>
+          <article><small>Browser Journey</small><b>{browserAssessment.headline}</b><span>{browserAssessment.value ?? browserAssessment.summary}</span>{browserAssessment.evidenceId ? <button type="button" onClick={() => selectEvidence(browserAssessment.evidenceId)}>Inspect browser evidence <ArrowUpRight size={11} /></button> : <span>{browserAssessment.measuredCount ? `${browserAssessment.measuredCount} measured browser signal${browserAssessment.measuredCount === 1 ? "" : "s"}` : "No measured browser signal"}</span>}</article>
+        </div>
+        {pageAssessment.evidenceId && pageAssessment.evidenceId !== browserAssessment.evidenceId && <button className="browser-page-assessment__primary" type="button" onClick={() => selectEvidence(pageAssessment.evidenceId)}>Inspect primary evidence <ArrowUpRight size={11} /></button>}
+      </div>
+      {(transportAssessment.value || browserAssessment.value) && <code>{browserAssessment.value ?? transportAssessment.value}</code>}
+    </section>}
     {view === "journey" && phase === "blocked" && <section className="journey-empty journey-empty--error"><Cpu size={22}/><strong>Browser Journey was not started</strong><span>{blockedReason}</span><Link href="/internet-journey">Inspect the network failure →</Link></section>}
     {view === "journey" && (phase === "idle" || phase === "waiting") && <section className="journey-empty"><Cpu size={22}/><strong>Awaiting an HTTP response</strong><span>Browser processing begins only after Internet Journey reaches “Browser receives response”.</span></section>}
     {view === "journey" && (phase === "running" || phase === "complete") && <section className="journey-graph browser-journey__graph"><ReactFlow nodes={flow.nodes} edges={flow.edges} nodeTypes={nodeTypes} onNodeClick={(_, node) => { if (node.type === "browser") setSelectedId(node.id); }} fitView fitViewOptions={{ padding: .12 }} minZoom={.2} maxZoom={1.4} nodesDraggable={false} elevateEdgesOnSelect><Background color="#23303b" gap={20}/><Controls/></ReactFlow></section>}

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { internetJourneyNodes } from "../src/journeys/internet/data.ts";
-import { absentStageLabel, cloneJourneyNodes, projectInspection, waterfallReading } from "../src/journeys/internet/project.ts";
+import { absentStageLabel, assessInternetJourney, cloneJourneyNodes, projectInspection, waterfallReading } from "../src/journeys/internet/project.ts";
 
 function event(sequence, stage, overrides = {}) {
   const payload = {
@@ -102,6 +102,37 @@ test("a missing proxy is not reported as unused", () => {
   const proxy = projected.nodes.find((node) => node.id === "proxy");
   assert.equal(detail(projected.nodes, "proxy", "Used").value, "Unavailable");
   assert.equal(absentStageLabel(proxy), undefined);
+});
+
+test("Internet Journey reports a measured top-level transport bottleneck with evidence", () => {
+  const projected = projectInspection(internetJourneyNodes, [
+    event(1, "server", { duration: 812.5 }),
+    event(2, "response", { duration: 4.2, responseStatus: 200 }),
+    event(3, "received", { duration: 0, measurement: "boundary" }),
+  ]);
+  const assessment = assessInternetJourney(projected.nodes);
+  assert.equal(assessment.state, "attention");
+  assert.equal(assessment.stage, "server");
+  assert.equal(assessment.value, "812.500 ms");
+  assert.equal(assessment.evidenceId, "inspection-a-1-server-1");
+});
+
+test("Internet Journey reports the document HTTP status without treating it as transport timing", () => {
+  const projected = projectInspection(internetJourneyNodes, [
+    event(1, "response", { duration: 2, responseStatus: 503 }),
+    event(2, "received", { duration: 0, measurement: "boundary" }),
+  ]);
+  const assessment = assessInternetJourney(projected.nodes);
+  assert.equal(assessment.state, "attention");
+  assert.equal(assessment.stage, "response");
+  assert.equal(assessment.value, "503");
+  assert.match(assessment.headline, /HTTP 503/);
+});
+
+test("Internet Journey stays incomplete until a measured document stage arrives", () => {
+  const assessment = assessInternetJourney(cloneJourneyNodes(internetJourneyNodes));
+  assert.equal(assessment.state, "incomplete");
+  assert.equal(assessment.evidenceId, undefined);
 });
 
 test("the later inspection wins when request ids collide", () => {

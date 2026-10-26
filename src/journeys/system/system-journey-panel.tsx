@@ -6,6 +6,7 @@ import { Activity, Cpu, Database, Files, Gauge, MemoryStick, Monitor, Network, R
 import type { TelemetryEvent } from "@/src/core/types";
 import { useTelemetryStore } from "@/src/stores";
 import { isolatedSystemDuration } from "@/src/core/metrics";
+import { eventsForLatestInspection } from "@/src/journeys/internet/project";
 
 type StageKey = "browser-processes" | "thread-scheduler" | "cpu" | "memory" | "file-system" | "socket-layer" | "ipc" | "graphics-pipeline" | "gpu" | "display";
 type Explorer = "processes" | "threads" | "memory" | "io" | "graphics" | "signals";
@@ -40,7 +41,7 @@ export function SystemJourneyPanel() {
     <nav className="journey-chain" aria-label="Journey modules"><Link href="/internet-journey">Internet Journey</Link><b>→</b><Link href="/browser-journey">Browser Journey</Link><b>→</b><strong>System Journey</strong></nav>
 
     <section className="system-scope" aria-label="Observation scope">
-      <div><Activity size={15}/><span><strong>Current telemetry buffer</strong><small>{model.sessionCount} session{model.sessionCount === 1 ? "" : "s"} · sequences {model.firstSequence ?? "—"}–{model.lastSequence ?? "—"}</small></span></div>
+      <div><Activity size={15}/><span><strong>Current inspection</strong><small title={model.executionId}>{model.executionId ?? "No execution selected"} · {model.sessionCount} session{model.sessionCount === 1 ? "" : "s"} · sequences {model.firstSequence ?? "—"}–{model.lastSequence ?? "—"}</small></span></div>
       <StatusLegend tone="measured" label="Measured" value={model.measuredCount} />
       <StatusLegend tone="boundary" label="Boundary only" value={model.boundaryCount} />
       <StatusLegend tone="missing" label="Not instrumented" value={10 - model.observedStages} />
@@ -85,9 +86,21 @@ export function SystemJourneyPanel() {
 }
 
 function buildSystemModel(events: TelemetryEvent[]) {
-  const latestSessionId = events.at(-1)?.sessionId;
-  const scopedEvents = latestSessionId ? events.filter((event) => event.sessionId === latestSessionId) : events;
-  const systemEvents = scopedEvents.filter((event) => typeof event.payload.systemStage === "string" || hasAny(event, ["processId", "threadId", "residentMemoryBytes", "cpuPercent", "contextSwitches", "diskReadBytes", "diskWriteBytes"]));
+  // The bridge adds its own inspection id to Core events, while the Core
+  // session id identifies the browser process. The final inspection-state
+  // event belongs to the bridge, so filtering by the last sessionId drops the
+  // actual process samples. Reuse the canonical inspection projection used by
+  // Internet Journey instead.
+  const projection = eventsForLatestInspection(events);
+  const scopedEvents = projection.events;
+  const systemSignalKeys = [
+    "processId", "processName", "threadId", "threadName", "residentMemoryBytes", "physicalMemoryBytes", "jsHeapBytes",
+    "cpuPercent", "cpuCoresUsed", "cpuSampleWindowMs", "logicalCpuCount", "contextSwitches", "diskReadBytes", "diskWriteBytes",
+    "connectionId", "primaryIp", "requestBytes", "responseBodyBytes", "httpVersion", "ipcMessageId", "ipcChannel", "ipcBytes",
+    "displayListBytes", "paintCommands", "layerCount", "gpuPercent", "gpuMemoryBytes", "gpuDurationMs", "refreshRateHz",
+    "presentedFrameId", "vsyncTimestamp",
+  ];
+  const systemEvents = scopedEvents.filter((event) => typeof event.payload.systemStage === "string" || hasAny(event, systemSignalKeys));
   const sampleKeys = ["cpuPercent", "cpuCoresUsed", "cpuSampleWindowMs", "logicalCpuCount", "contextSwitches", "residentMemoryBytes", "physicalMemoryBytes", "diskReadBytes", "diskWriteBytes", "gpuPercent", "gpuMemoryBytes", "refreshRateHz"];
   const latestSample = [...systemEvents].reverse().find((event) => hasAny(event, sampleKeys));
   const latest = latestNumbers(latestSample ? [latestSample] : [], sampleKeys);
@@ -119,6 +132,7 @@ function buildSystemModel(events: TelemetryEvent[]) {
     boundaryCount: stageModels.filter((stage) => stage.state === "boundary").length,
     errorCount: systemEvents.filter((event) => event.status === "error").length,
     sessionCount: new Set(scopedEvents.map((event) => event.sessionId)).size,
+    executionId: projection.executionId,
     firstSequence: scopedEvents.at(0)?.sequence, lastSequence: scopedEvents.at(-1)?.sequence,
     latestSample, latestSampleState: typeof latestSample?.payload.cpuSampleState === "string" ? latestSample.payload.cpuSampleState : undefined,
     networkReceived: receivedNetworkBytes(scopedEvents),

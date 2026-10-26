@@ -1,6 +1,6 @@
 import type { TelemetryEvent } from "@/src/core/types";
 
-export const reverseSchemaVersion = 1;
+export const reverseSchemaVersion = 2;
 
 export type EvidenceClass = "OBSERVED" | "CORRELATED" | "INFERRED" | "VERIFIED" | "UNKNOWN";
 export type VerificationStatus = "unverified" | "verified" | "contradicted";
@@ -48,6 +48,9 @@ export interface ReverseEvidence {
   verificationStatus: VerificationStatus;
   timestamp: number;
   durationMs?: number;
+  recordId?: string;
+  parentRecordId?: string;
+  contextId?: string;
   frameId?: string;
   executionContextId?: string;
   scriptId?: string;

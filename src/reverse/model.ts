@@ -1,7 +1,7 @@
 import type { TelemetryEvent } from "@/src/core/types";
 import { reverseSchemaVersion, type EvidenceClass, type ReverseEvidence, type ReverseGraphEdge, type ReverseGraphNode, type ReverseNodeType, type ReverseRelation, type ReverseTrace } from "./types.ts";
 
-type RuntimeRecord = { sequence?: number; timestamp?: number; kind?: string; durationMs?: number; data?: Record<string, unknown> };
+type RuntimeRecord = { recordId?: string; parentRecordId?: string; contextId?: string; sequence?: number; timestamp?: number; kind?: string; durationMs?: number; data?: Record<string, unknown> };
 
 export function buildReverseTrace(events: TelemetryEvent[], sessionId?: string): ReverseTrace {
   const batches = events.filter((event) => event.name === "reverse-evidence-batch" && (!sessionId || event.payload.sessionId === sessionId));
@@ -11,6 +11,7 @@ export function buildReverseTrace(events: TelemetryEvent[], sessionId?: string):
   const nodes: ReverseGraphNode[] = [];
   const edges: ReverseGraphEdge[] = [];
   const nodeByKey = new Map<string, ReverseGraphNode>();
+  const nodeByEvidenceId = new Map<string, ReverseGraphNode>();
   const actions = new Map<string, ReverseGraphNode>();
 
   for (const batch of batches) {
@@ -33,6 +34,11 @@ export function buildReverseTrace(events: TelemetryEvent[], sessionId?: string):
         verificationStatus: "unverified",
         timestamp: typeof record.timestamp === "number" ? record.timestamp : batch.timestamp,
         durationMs: typeof record.durationMs === "number" ? record.durationMs : undefined,
+        recordId: stringValue(record.recordId) ?? stringValue(data.recordId) ?? `${batch.id}:${record.sequence ?? index}`,
+        parentRecordId: stringValue(record.parentRecordId) ?? stringValue(data.parentRecordId),
+        contextId: stringValue(record.contextId) ?? stringValue(data.contextId),
+        frameId: stringId(data.frameId ?? batch.payload.frameId),
+        executionContextId: stringId(data.executionContextId ?? batch.payload.executionContextId),
         requestId: stringValue(data.requestId),
         sourceLocation: parseSourceLocation(data.stack ?? data.registrationStack),
         mechanism: "page-runtime-probe",
@@ -49,12 +55,13 @@ export function buildReverseTrace(events: TelemetryEvent[], sessionId?: string):
       if (!nodeSpec) continue;
       const node = ensureNode(nodeByKey, nodes, `${nodeSpec.type}:${stableKey(item)}`, nodeSpec.type, nodeSpec.label, { ...nodeSpec.metadata, actionId });
       node.evidenceIds.push(item.id);
+      nodeByEvidenceId.set(item.id, node);
       relate(edges, actionNode.id, node.id, relationFromAction(item), item, evidenceClassForRelation(item));
     }
   }
 
   for (const node of nodes) node.evidenceIds = [...new Set(node.evidenceIds)];
-  linkObservedChains(nodes, edges, evidence);
+  linkObservedChains(nodes, edges, evidence, nodeByEvidenceId);
   const first = batches[0];
   return {
     schemaVersion: reverseSchemaVersion,
@@ -68,7 +75,8 @@ export function buildReverseTrace(events: TelemetryEvent[], sessionId?: string):
     evidence,
     limitations: [
       "Event listeners registered before the reverse init script may be visible only as an observed DOM event, not as a named listener.",
-      "Network-to-DOM relationships are correlated by action, runtime timing and identifiers; temporal proximity alone is not treated as proof.",
+      "Action-to-runtime relationships remain correlated unless the probe supplies an explicit parentRecordId.",
+      "Explicit runtime parent links are limited to the page context captured by this probe; browser-internal and server-side work remains outside the graph.",
       "Server-side processing and browser-internal code are outside the captured page runtime boundary.",
     ],
     sourceEvents: batches,
@@ -90,20 +98,22 @@ function nodeSpecFor(evidence: ReverseEvidence): { type: ReverseNodeType; label:
 }
 
 function relationFromAction(evidence: ReverseEvidence): ReverseRelation {
-  if (evidence.kind === "dom-event") return "TRIGGERS";
-  if (evidence.kind === "event-listener-enter") return "HANDLED_BY";
-  if (evidence.kind === "network-request") return "INITIATES_REQUEST";
-  if (evidence.kind === "network-response") return "CORRELATES_WITH";
-  if (evidence.kind === "dom-mutation") return "RENDERS";
-  if (evidence.kind === "async-task") return "SCHEDULES";
+  void evidence;
+  // The automation action bounds the capture window. It does not identify
+  // which page record caused another record, so keep this edge explicitly
+  // observational rather than assigning a causal relation.
   return "CORRELATES_WITH";
 }
 
 function evidenceClassForRelation(evidence: ReverseEvidence): EvidenceClass {
-  return evidence.kind === "dom-event" || evidence.kind === "event-listener-enter" ? "OBSERVED" : "CORRELATED";
+  void evidence;
+  // A capture action is the observation window, not a proof that every record
+  // in that window was caused by the automation command.
+  return "CORRELATED";
 }
 
-function linkObservedChains(nodes: ReverseGraphNode[], edges: ReverseGraphEdge[], evidence: ReverseEvidence[]) {
+function linkObservedChains(nodes: ReverseGraphNode[], edges: ReverseGraphEdge[], evidence: ReverseEvidence[], nodeByEvidenceId: Map<string, ReverseGraphNode>) {
+  const evidenceByRecordId = new Map(evidence.flatMap((item) => item.recordId ? [[item.recordId, item] as const] : []));
   const requests = new Map<string, ReverseGraphNode>();
   const responses = new Map<string, ReverseGraphNode>();
   for (const node of nodes) {
@@ -117,14 +127,28 @@ function linkObservedChains(nodes: ReverseGraphNode[], edges: ReverseGraphEdge[]
     const item = response && evidence.find((candidate) => candidate.id === response.evidenceIds[0]);
     if (response && item) relate(edges, request.id, response.id, "RECEIVES_RESPONSE", item, "OBSERVED");
   }
-  const listeners = nodes.filter((node) => node.type === "EventListener");
-  const events = nodes.filter((node) => node.type === "DOMEvent");
-  for (const listener of listeners) for (const event of events) {
-    if (String(listener.metadata.eventType) === String(event.metadata.eventType)) {
-      const item = evidence.find((candidate) => candidate.id === listener.evidenceIds[0]);
-      if (item) relate(edges, event.id, listener.id, "HANDLED_BY", item, "CORRELATED");
-    }
+  // Parent IDs are emitted by the probe while the callback/task is running.
+  // They are the only basis for cross-entity causal edges here; matching by
+  // event type or timestamp would join unrelated listeners and requests.
+  for (const child of evidence) {
+    if (!child.parentRecordId) continue;
+    const parent = evidenceByRecordId.get(child.parentRecordId);
+    const source = parent ? nodeByEvidenceId.get(parent.id) : undefined;
+    const target = nodeByEvidenceId.get(child.id);
+    if (!parent || !source || !target) continue;
+    const relation = explicitRelation(parent, child);
+    relate(edges, source.id, target.id, relation, child, "OBSERVED");
   }
+}
+
+function explicitRelation(parent: ReverseEvidence, child: ReverseEvidence): ReverseRelation {
+  if (child.kind === "event-listener-enter") return "HANDLED_BY";
+  if (child.kind === "network-request") return "INITIATES_REQUEST";
+  if (child.kind === "network-response") return "RECEIVES_RESPONSE";
+  if (child.kind === "async-task") return String(child.data.phase) === "scheduled" ? "SCHEDULES" : "CALLS";
+  if (child.kind === "dom-mutation") return "RENDERS";
+  if (parent.kind === "dom-event") return "TRIGGERS";
+  return "CORRELATES_WITH";
 }
 
 function ensureNode(map: Map<string, ReverseGraphNode>, nodes: ReverseGraphNode[], id: string, type: ReverseNodeType, label: string, metadata: Record<string, unknown>) {
@@ -146,7 +170,7 @@ function relate(edges: ReverseGraphEdge[], source: string, target: string, relat
 
 function stableKey(evidence: ReverseEvidence) {
   const data = evidence.data;
-  return `${evidence.actionId}:${evidence.kind}:${String(data.requestId ?? data.eventType ?? data.listenerName ?? data.mutationType ?? evidence.id)}`;
+  return `${evidence.actionId}:${evidence.kind}:${String(evidence.recordId ?? data.recordId ?? data.requestId ?? data.eventType ?? data.listenerName ?? data.mutationType ?? evidence.id)}`;
 }
 
 function parseSourceLocation(raw: unknown) {
@@ -169,3 +193,4 @@ function locatorLabel(value: unknown) {
 }
 
 function stringValue(value: unknown) { return typeof value === "string" && value.length > 0 ? value : undefined; }
+function stringId(value: unknown) { return value == null ? undefined : String(value); }

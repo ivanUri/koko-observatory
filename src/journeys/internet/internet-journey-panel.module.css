@@ -22,6 +22,45 @@
   font-size: 11px;
 }
 
+.internetPage :global(.journey-assessment) {
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+  margin: 10px 0;
+  padding: 13px 15px;
+  border: 1px solid #294437;
+  background: #0a1917;
+}
+
+.internetPage :global(.journey-assessment--attention) {
+  border-color: #5a4630;
+  background: #1b1710;
+}
+
+.internetPage :global(.journey-assessment--incomplete) {
+  border-color: #34414a;
+  background: #0e161d;
+}
+
+.internetPage :global(.journey-assessment__icon) {
+  padding-top: 2px;
+  color: #55d57d;
+}
+
+.internetPage :global(.journey-assessment--attention .journey-assessment__icon) { color: #edb34f; }
+.internetPage :global(.journey-assessment--incomplete .journey-assessment__icon) { color: #82909a; }
+
+.internetPage :global(.journey-assessment__body) { min-width: 0; flex: 1; }
+.internetPage :global(.journey-assessment__eyebrow) { display: block; margin-bottom: 4px; color: #6f8490; font-size: 9px; letter-spacing: .08em; text-transform: uppercase; }
+.internetPage :global(.journey-assessment strong) { display: block; color: #d4e1e5; font-size: 12px; }
+.internetPage :global(.journey-assessment p) { margin: 4px 0 8px; color: #8b9aa3; font-size: 10px; line-height: 1.45; }
+.internetPage :global(.journey-assessment code) { color: #edb34f; font: 11px var(--font-jetbrains), monospace; }
+.internetPage :global(.journey-assessment__actions) { display: flex; flex-wrap: wrap; gap: 12px; }
+.internetPage :global(.journey-assessment__actions button),
+.internetPage :global(.journey-assessment__actions a) { display: inline-flex; align-items: center; gap: 4px; padding: 0; border: 0; color: #57d6a5; background: transparent; font-size: 10px; text-decoration: none; cursor: pointer; }
+.internetPage :global(.journey-assessment__actions button:hover),
+.internetPage :global(.journey-assessment__actions a:hover) { color: #b9f4dc; }
+
 .internetPage :global(.journey-node__summary strong) {
   font-size: 12px;
 }

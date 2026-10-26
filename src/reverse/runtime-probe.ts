@@ -9,6 +9,8 @@ export const REVERSE_RUNTIME_PROBE = String.raw`(() => {
   const MAX_RECORDS = 400;
   const records = [];
   let sequence = 0;
+  const contextStack = [];
+  const eventRecords = new WeakMap();
   const listeners = new WeakMap();
   const originalAdd = EventTarget.prototype.addEventListener;
   const originalRemove = EventTarget.prototype.removeEventListener;
@@ -35,9 +37,26 @@ export const REVERSE_RUNTIME_PROBE = String.raw`(() => {
     };
   };
   const stack = () => String(new Error().stack || '').split('\n').slice(2, 9).join('\n');
+  const activeRecordId = () => contextStack.length ? contextStack[contextStack.length - 1].recordId : undefined;
+  const withContext = (record, callback) => {
+    if (!record) return callback();
+    contextStack.push(record);
+    try { return callback(); } finally { contextStack.pop(); }
+  };
   const push = (kind, data, extra = {}) => {
-    if (records.length >= MAX_RECORDS) return;
-    records.push({ sequence: ++sequence, timestamp: Date.now(), kind, data, ...extra });
+    if (records.length >= MAX_RECORDS) return null;
+    const recordId = 'probe-' + (++sequence);
+    const parentRecordId = extra.parentRecordId ?? data?.parentRecordId ?? activeRecordId();
+    const contextId = extra.contextId ?? recordId;
+    const enrichedData = {
+      ...(data || {}),
+      recordId,
+      ...(parentRecordId ? { parentRecordId } : {}),
+      contextId,
+    };
+    const record = { recordId, sequence, timestamp: Date.now(), kind, data: enrichedData, contextId, ...(parentRecordId ? { parentRecordId } : {}), ...extra };
+    records.push(record);
+    return record;
   };
   const listenerName = (listener) => String(listener?.name || listener?.handleEvent?.name || 'anonymous').slice(0, 160);
   const wrappedFor = (targetObject, type, listener, options) => {
@@ -58,13 +77,16 @@ export const REVERSE_RUNTIME_PROBE = String.raw`(() => {
     const owner = this;
     const wrapped = function(...args) {
       const started = performance.now();
-      push('event-listener-enter', { eventType: key, listenerName: listenerName(listener), target: target(owner), registrationStack: entry.registrationStack, stack: stack() });
-      try {
-        if (typeof listener === 'function') return listener.apply(this, args);
-        if (listener && typeof listener.handleEvent === 'function') return listener.handleEvent.apply(listener, args);
-      } finally {
-        push('event-listener-exit', { eventType: key, listenerName: listenerName(listener), target: target(owner) }, { durationMs: performance.now() - started });
-      }
+      const eventRecord = args[0] && typeof args[0] === 'object' ? eventRecords.get(args[0]) : undefined;
+      const entered = push('event-listener-enter', { eventType: key, listenerName: listenerName(listener), target: target(owner), registrationStack: entry.registrationStack, stack: stack() }, { parentRecordId: eventRecord?.recordId });
+      return withContext(entered, () => {
+        try {
+          if (typeof listener === 'function') return listener.apply(this, args);
+          if (listener && typeof listener.handleEvent === 'function') return listener.handleEvent.apply(listener, args);
+        } finally {
+          push('event-listener-exit', { eventType: key, listenerName: listenerName(listener), target: target(owner) }, { durationMs: performance.now() - started, parentRecordId: entered?.recordId });
+        }
+      });
     };
     const entry = { listener, options, wrapped, registrationStack: stack() };
     entries.push(entry);
@@ -78,7 +100,10 @@ export const REVERSE_RUNTIME_PROBE = String.raw`(() => {
 
   const eventTypes = ['click', 'dblclick', 'input', 'change', 'submit', 'keydown', 'keyup', 'pointerdown', 'pointerup', 'focus', 'blur', 'scroll'];
   for (const type of eventTypes) {
-    document.addEventListener(type, (event) => push('dom-event', { eventType: type, target: target(event.target), defaultPrevented: event.defaultPrevented, phase: event.eventPhase }), true);
+    originalAdd.call(document, type, (event) => {
+      const record = push('dom-event', { eventType: type, target: target(event.target), defaultPrevented: event.defaultPrevented, phase: event.eventPhase });
+      if (record && event && typeof event === 'object') eventRecords.set(event, record);
+    }, true);
   }
 
   const observer = new MutationObserver((mutations) => {
@@ -102,12 +127,12 @@ export const REVERSE_RUNTIME_PROBE = String.raw`(() => {
       const url = redactUrl(typeof input === 'string' ? input : input?.url || '');
       const method = String(init?.method || input?.method || 'GET').toUpperCase();
       const started = performance.now();
-      push('network-request', { requestId, protocol: 'fetch', method, url, stack: stack() });
+      const requestRecord = push('network-request', { requestId, protocol: 'fetch', method, url, stack: stack() });
       return originalFetch.apply(this, arguments).then((response) => {
-        push('network-response', { requestId, protocol: 'fetch', method, url, status: response.status, ok: response.ok }, { durationMs: performance.now() - started });
+        push('network-response', { requestId, protocol: 'fetch', method, url, status: response.status, ok: response.ok }, { durationMs: performance.now() - started, parentRecordId: requestRecord?.recordId });
         return response;
       }, (error) => {
-        push('network-response', { requestId, protocol: 'fetch', method, url, status: 0, ok: false, error: String(error).slice(0, 240) }, { durationMs: performance.now() - started });
+        push('network-response', { requestId, protocol: 'fetch', method, url, status: 0, ok: false, error: String(error).slice(0, 240) }, { durationMs: performance.now() - started, parentRecordId: requestRecord?.recordId });
         throw error;
       });
     };
@@ -125,8 +150,8 @@ export const REVERSE_RUNTIME_PROBE = String.raw`(() => {
       const meta = this.__kokoReverseRequest || { method: 'GET', url: '' };
       const requestId = 'xhr-' + Date.now() + '-' + Math.random().toString(36).slice(2, 7);
       const started = performance.now();
-      push('network-request', { requestId, protocol: 'xhr', method: meta.method, url: meta.url, stack: stack() });
-      this.addEventListener('loadend', () => push('network-response', { requestId, protocol: 'xhr', method: meta.method, url: meta.url, status: this.status, ok: this.status >= 200 && this.status < 400 }, { durationMs: performance.now() - started }), { once: true });
+      const requestRecord = push('network-request', { requestId, protocol: 'xhr', method: meta.method, url: meta.url, stack: stack() });
+      originalAdd.call(this, 'loadend', () => push('network-response', { requestId, protocol: 'xhr', method: meta.method, url: meta.url, status: this.status, ok: this.status >= 200 && this.status < 400 }, { durationMs: performance.now() - started, parentRecordId: requestRecord?.recordId }), { once: true });
       return send.apply(this, arguments);
     };
   }
@@ -134,10 +159,10 @@ export const REVERSE_RUNTIME_PROBE = String.raw`(() => {
   const originalSetTimeout = window.setTimeout;
   window.setTimeout = function(callback, delay, ...args) {
     const taskId = 'timer-' + Date.now() + '-' + Math.random().toString(36).slice(2, 7);
-    push('async-task', { taskId, taskType: 'timeout', delay: Number(delay) || 0, callbackName: callback?.name || 'anonymous', phase: 'scheduled' });
+    const scheduled = push('async-task', { taskId, taskType: 'timeout', delay: Number(delay) || 0, callbackName: callback?.name || 'anonymous', phase: 'scheduled' });
     return originalSetTimeout.call(this, (...callbackArgs) => {
-      push('async-task', { taskId, taskType: 'timeout', callbackName: callback?.name || 'anonymous', phase: 'started' });
-      return typeof callback === 'function' ? callback(...callbackArgs) : undefined;
+      const started = push('async-task', { taskId, taskType: 'timeout', callbackName: callback?.name || 'anonymous', phase: 'started' }, { parentRecordId: scheduled?.recordId });
+      return withContext(started, () => typeof callback === 'function' ? callback(...callbackArgs) : undefined);
     }, delay, ...args);
   };
 

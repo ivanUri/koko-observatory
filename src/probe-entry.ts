@@ -1,12 +1,6 @@
 import { record } from "rrweb";
 import axe from "axe-core";
 import { onCLS, onFCP, onINP, onLCP, onTTFB } from "web-vitals";
-import { registerInstrumentations } from "@opentelemetry/instrumentation";
-import { DocumentLoadInstrumentation } from "@opentelemetry/instrumentation-document-load";
-import { LongTaskInstrumentation } from "@opentelemetry/instrumentation-long-task";
-import { WebTracerProvider } from "@opentelemetry/sdk-trace-web";
-import { SimpleSpanProcessor } from "@opentelemetry/sdk-trace-base";
-import { ExportResultCode } from "@opentelemetry/core";
 
 type ProbeHost = (name: string, payload: string) => void;
 
@@ -100,23 +94,6 @@ const runAccessibilityAudit = async () => {
   }
 };
 
-class KokoSpanExporter {
-  export(spans: Array<{ name: string; startTime: unknown; duration: unknown; attributes: Record<string, unknown> }>, done: (result: { code: ExportResultCode }) => void) {
-    for (const span of spans) {
-      emit("otel-span", {
-        name: span.name,
-        startTime: span.startTime,
-        duration: span.duration,
-        attributes: span.attributes,
-      });
-    }
-    done({ code: ExportResultCode.SUCCESS });
-  }
-
-  shutdown() { return Promise.resolve(); }
-  forceFlush() { return Promise.resolve(); }
-}
-
 if (!window.__kokoObservatoryProbeInstalled) {
   window.__kokoObservatoryProbeInstalled = true;
   emit("probe-ready", { url: location.href, startedAt: performance.now() });
@@ -158,41 +135,63 @@ if (!window.__kokoObservatoryProbeInstalled) {
   if (document.readyState === "complete") window.setTimeout(reportNavigationFallback, 0);
   else window.addEventListener("load", reportNavigationFallback, { once: true });
 
-  try {
-    const provider = new WebTracerProvider({
-      spanProcessors: [new SimpleSpanProcessor(new KokoSpanExporter())],
-    });
-    provider.register();
-    registerInstrumentations({
-      instrumentations: [
-        new DocumentLoadInstrumentation(),
-        new LongTaskInstrumentation(),
-      ],
-    });
-    // Koko Core already emits the canonical fetch/XHR network lifecycle. The
-    // browser Fetch/XHR OTel wrappers assume native browser invocation
-    // semantics and can reject on lightweight runtimes, so they are kept out
-    // of the page probe to guarantee instrumentation is side-effect free.
-    emit("otel-ready", { instrumentations: ["document-load", "long-task"], networkSource: "koko-core" });
-  } catch (error) {
-    emit("otel-error", { message: error instanceof Error ? error.message : String(error) });
-  }
+  // Core already emits the canonical network and browser-stage measurements.
+  // The browser-side OTel document-load/long-task instrumentations assume
+  // Chromium semantics that are not available in every Koko realm and can
+  // crash JS-heavy pages, so do not install them in the injected probe.
+  emit("otel-ready", {
+    instrumentations: [],
+    networkSource: "koko-core",
+    mode: "core-native",
+  });
 
-  try {
-    record({
-      emit: (event) => emit("rrweb-event", event),
-      checkoutEveryNms: 30_000,
-      sampling: {
-        mousemove: false,
-        mouseInteraction: true,
-        input: "last",
-        scroll: 100,
-      },
-    });
-    emit("rrweb-ready", { version: "rrweb", startedAt: performance.now() });
-  } catch (error) {
-    emit("rrweb-error", { message: error instanceof Error ? error.message : String(error) });
-  }
+  const DOM_COMPLEXITY_LIMIT = 600;
+  const startReplayRecording = () => {
+    const nodeCount = document.querySelectorAll("*").length;
+    // rrweb's full DOM serializer is reliable for ordinary pages, but very
+    // large hydrated trees can exceed the lightweight Core DOM wrapper
+    // lifecycle during teardown. Keep the captured HTML fallback instead of
+    // producing an incomplete or unsafe replay stream.
+    if (nodeCount > DOM_COMPLEXITY_LIMIT) {
+      emit("rrweb-skipped", { reason: "dom-too-large", nodeCount, limit: DOM_COMPLEXITY_LIMIT });
+      return;
+    }
+    try {
+      const stopRecording = record({
+        emit: (event) => emit("rrweb-event", event),
+        inlineStylesheet: false,
+        collectFonts: false,
+        recordCanvas: false,
+        checkoutEveryNms: 30_000,
+        sampling: {
+          mousemove: false,
+          mouseInteraction: true,
+          input: "last",
+          scroll: 100,
+        },
+      });
+      emit("rrweb-ready", { version: "rrweb", startedAt: performance.now() });
+      // Keep the full snapshot and the first hydration mutations, then stop
+      // before Core tears down the realm. This prevents rrweb's observer graph
+      // from retaining DOM wrappers into native teardown while preserving a
+      // useful, replayable inspection stream.
+      window.setTimeout(() => {
+        try { stopRecording?.(); } catch { /* best-effort cleanup */ }
+      }, 1_500);
+    } catch (error) {
+      emit("rrweb-error", { message: error instanceof Error ? error.message : String(error) });
+    }
+  };
+  // Starting rrweb before the parser/hydration settles makes its mutation
+  // observer observe Core's document-construction work and can retain DOM
+  // wrappers across a detached realm. A load-time full snapshot preserves
+  // replay fidelity while keeping instrumentation outside that lifecycle.
+  // Keep this below the shortest supported observation window so a caller
+  // using a bounded 2s capture still receives either rrweb-ready or the
+  // explicit large-DOM skip result.
+  const scheduleReplayRecording = () => window.setTimeout(startReplayRecording, 1_000);
+  if (document.readyState === "loading") window.addEventListener("load", scheduleReplayRecording, { once: true });
+  else scheduleReplayRecording();
 
   if (window.__kokoProbeOptions?.accessibilityAudit !== false) {
     let auditScheduled = false;
@@ -202,7 +201,19 @@ if (!window.__kokoObservatoryProbeInstalled) {
       // Give hydration and the first layout a small settling window. The
       // result is explicitly labelled as an axe audit and never mixed into
       // the runtime performance metrics.
-      window.setTimeout(() => void runAccessibilityAudit(), 1_000);
+      window.setTimeout(() => {
+        const auditNodeCount = document.querySelectorAll("*").length;
+        if (auditNodeCount > DOM_COMPLEXITY_LIMIT) {
+          emit("accessibility-audit-skipped", {
+            tool: "axe-core",
+            reason: "dom-too-large",
+            nodeCount: auditNodeCount,
+            limit: DOM_COMPLEXITY_LIMIT,
+          });
+          return;
+        }
+        void runAccessibilityAudit();
+      }, 1_000);
     };
     if (document.readyState === "complete") scheduleAudit();
     else {

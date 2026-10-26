@@ -200,6 +200,8 @@ function ObservatoryRuntime({ initialPlugin }: { initialPlugin: string }) {
 function GlobalInspector() {
   const url = useUIStore((state) => state.inspectorUrl);
   const inspecting = useUIStore((state) => state.inspecting);
+  const inspectionStartedAt = useUIStore((state) => state.inspectionStartedAt);
+  const telemetryEvents = useTelemetryStore((state) => state.events);
   const setUrl = useUIStore((state) => state.setInspectorUrl);
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const settings = useSettingsStore();
@@ -253,19 +255,26 @@ function GlobalInspector() {
     if (key === "scrollSettleMs") settings.update({ scrollSettleMs: value as number });
     if (key === "includeFrames") settings.update({ includeFrames: value as boolean });
   };
-  return <form className={inspecting ? "global-inspector global-inspector--loading" : "global-inspector"} onSubmit={submit} aria-label="Global URL inspector">
+  const observingRuntime = inspecting && telemetryEvents.some((event) => {
+    if (inspectionStartedAt != null && event.timestamp < inspectionStartedAt) return false;
+    return event.payload.lifecycleStage === "domcontentloaded" || event.payload.lifecycleStage === "load";
+  });
+  const inspectorClass = inspecting
+    ? `global-inspector ${observingRuntime ? "global-inspector--observing" : "global-inspector--loading"}`
+    : "global-inspector";
+  return <form className={inspectorClass} onSubmit={submit} aria-label="Global URL inspector">
     <div className="global-inspector__bar">
       <Globe2 size={14} />
       <input value={url} onChange={(event) => setUrl(event.target.value)} aria-label="Global URL to inspect" placeholder="https://example.com" />
       <button type="button" className="global-inspector__advanced-toggle" onClick={() => setAdvancedOpen((open) => !open)} aria-expanded={advancedOpen}><SlidersHorizontal size={13} />Advanced<ChevronDown size={13} className={advancedOpen ? "global-inspector__chevron global-inspector__chevron--open" : "global-inspector__chevron"} /></button>
-      <button type="submit" disabled={inspecting}>{inspecting ? "Inspecting…" : "Inspect URL"}</button>
+      <button type="submit" disabled={inspecting}>{observingRuntime ? "Observing…" : inspecting ? "Inspecting…" : "Inspect URL"}</button>
     </div>
     {advancedOpen && <section className="global-inspector__advanced" aria-label="Advanced inspection options">
       <header><div><strong>Advanced run options</strong><span>Shared values stay in sync with Settings and apply to the next run.</span></div><button type="button" className="global-inspector__reset" onClick={() => setOptions((current) => ({ ...current, ...settingsDefaults }))}>Reset</button></header>
       <div className="global-inspector__fields">
         <label><span>Wait until</span><select value={options.waitUntil} onChange={(event) => update("waitUntil", event.target.value as WaitUntil)}><option value="domcontentloaded">DOMContentLoaded</option><option value="load">Load</option><option value="domstable">DOM stable</option><option value="networkidle">Network idle</option><option value="done">Done</option></select></label>
         <label><span>Wait timeout (ms)</span><input type="number" min="0" step="1000" value={options.waitMs} onChange={(event) => update("waitMs", Math.max(0, Number(event.target.value) || 0))} /></label>
-        <label><span>Background observation (ms)</span><input type="number" min="0" step="1000" value={options.observeMs} onChange={(event) => update("observeMs", Math.max(0, Number(event.target.value) || 0))} /></label>
+        <label><span>Runtime observation window (ms)</span><input type="number" min="0" step="1000" value={options.observeMs} onChange={(event) => update("observeMs", Math.max(0, Number(event.target.value) || 0))} /></label>
         <label><span>Terminate deadline (ms) <small>0 = disabled</small></span><input type="number" min="0" step="1000" value={options.terminateMs} onChange={(event) => update("terminateMs", Math.max(0, Number(event.target.value) || 0))} /></label>
         <label className="global-inspector__checkbox"><span>Expand lazy content <small>bounded scrolling</small></span><input type="checkbox" checked={options.expandLazy} onChange={(event) => update("expandLazy", event.target.checked)} /></label>
         <label><span>Maximum lazy scrolls</span><input type="number" min="0" max="10000" step="1" value={options.maxScrolls} onChange={(event) => update("maxScrolls", Math.max(0, Math.min(10000, Number(event.target.value) || 0)))} /></label>
@@ -283,7 +292,7 @@ function GlobalInspector() {
           <small id="fixed-headers-help" className="global-inspector__field-help">Enter one <code>Name: value</code> pair per line. Leave blank if the page does not need custom headers.</small>
         </label>
       </div>
-      <p className="global-inspector__hint">Koko reports lifecycle milestones as they happen, shows an early preview, and keeps servicing the page for the background observation window. Enable bounded lazy expansion for infinite-scroll pages.</p>
+      <p className="global-inspector__hint">Koko reports lifecycle milestones as they happen, shows an early preview, and keeps collecting runtime evidence during the observation window. Enable bounded lazy expansion for infinite-scroll pages.</p>
     </section>}
   </form>;
 }

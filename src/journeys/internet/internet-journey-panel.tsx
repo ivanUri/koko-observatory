@@ -4,10 +4,11 @@ import { useCallback, useEffect, useMemo, useRef } from "react";
 import Link from "next/link";
 import { Background, BaseEdge, Controls, Handle, MarkerType, Position, ReactFlow, getStraightPath, type EdgeProps, type NodeProps } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { ChevronDown, ChevronLeft, ChevronRight, Circle, CircleHelp, Globe2, Pause, Play, Search } from "lucide-react";
+import { AlertTriangle, ArrowUpRight, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, Circle, CircleHelp, Globe2, Pause, Play, Search } from "lucide-react";
 import { internetJourneyEdges, internetJourneyNodes } from "./data";
-import { absentStageLabel, waterfallReading } from "./project";
+import { absentStageLabel, assessInternetJourney, waterfallReading } from "./project";
 import { useInternetJourneyStore } from "./store";
+import { useSelectionStore } from "@/src/stores";
 import type { JourneyNode } from "./types";
 import styles from "./internet-journey-panel.module.css";
 
@@ -140,6 +141,7 @@ function JourneyEdge(props: EdgeProps) {
 
 export function InternetJourneyPanel() {
   const { cursor, playing, speed, mode, query, phase, recording, recordedEvents, revealedCount, executionId, otherTransfers, nodes: liveNodes, play, seek, setSpeed, setMode, setQuery, toggleRecording, revealNext } = useInternetJourneyStore();
+  const selectEvidence = useSelectionStore((state) => state.select);
   const transferCount = otherTransfers?.length ?? 0;
   const journeyNodes = liveNodes.length ? liveNodes : internetJourneyNodes;
   const positions = useRef<Record<string, { x: number; y: number }>>({});
@@ -195,6 +197,7 @@ export function InternetJourneyPanel() {
   ] as const, [journeyNodes]);
   const totalDuration = durations.reduce((total, [, node]) => total + (node?.status === "complete" && node.metadata.measurement === "measured" ? node.duration : 0), 0);
   const reading = useMemo(() => waterfallReading(journeyNodes), [journeyNodes]);
+  const assessment = useMemo(() => assessInternetJourney(journeyNodes), [journeyNodes]);
   const explained = useMemo(() => journeyNodes.slice(0, revealedCount).filter((node) => node.metadata.estimated === false && (
     !query || `${node.title} ${node.metadata.explanation} ${node.metadata.issues.join(" ")}`.toLowerCase().includes(query.toLowerCase())
   )), [journeyNodes, query, revealedCount]);
@@ -220,6 +223,16 @@ export function InternetJourneyPanel() {
       </div>
     </div>
     {phase === "idle" ? <section className="journey-empty"><Globe2 size={22} /><strong>Inspect an Internet journey</strong><span>Enter a URL above to launch Koko and reveal each measured network step.</span></section> : <>
+    <section className={`journey-assessment journey-assessment--${assessment.state}`}>
+      <div className="journey-assessment__icon">{assessment.state === "attention" ? <AlertTriangle size={16} /> : assessment.state === "healthy" ? <CheckCircle2 size={16} /> : <Search size={16} />}</div>
+      <div className="journey-assessment__body"><span className="journey-assessment__eyebrow">Transport assessment</span><strong>{assessment.headline}</strong><p>{assessment.summary}</p>
+        <div className="journey-assessment__actions">
+          {assessment.evidenceId && <button type="button" onClick={() => selectEvidence(assessment.evidenceId)}>Inspect evidence <ArrowUpRight size={12} /></button>}
+          {executionId && <Link href={`/network?execution=${encodeURIComponent(executionId)}`}>Open Network <ArrowUpRight size={12} /></Link>}
+        </div>
+      </div>
+      {assessment.value && <code>{assessment.value}</code>}
+    </section>
     {executionId ? <p className="journey-scope"><span>Top-level document only. {transferCount} other {transferCount === 1 ? "transfer" : "transfers"} in this inspection.</span><Link href={`/network?execution=${encodeURIComponent(executionId)}`}>Open Network</Link></p> : null}
     <section className={`journey-graph journey-graph--${phase}`}>
       <ReactFlow nodes={nodes} edges={edges} nodeTypes={nodeTypes} edgeTypes={edgeTypes} onNodeDragStop={onNodeDragStop} fitView minZoom={.3} maxZoom={1.3}><Background color="#23303b" gap={20} size={1} /><Controls /></ReactFlow>

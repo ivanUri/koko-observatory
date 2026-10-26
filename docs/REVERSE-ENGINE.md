@@ -10,7 +10,7 @@ The probe records DOM events, event-listener entry/exit, DOM mutations, fetch/XH
 
 ## Evidence contract
 
-Reverse records use schema version `1`. Each record has an action id, runtime kind, timestamp, mechanism, redaction flag and provenance class. The UI only labels a record `OBSERVED` when the page probe directly emitted it. Request/response and event/listener graph links are marked `CORRELATED` unless the runtime emitted the relationship directly. There is no hidden “likely” label presented as fact.
+Reverse records use schema version `2`. Each record has an action id, stable `recordId`, runtime kind, timestamp, mechanism, redaction flag and provenance class. Callbacks, requests, responses and timer starts may carry an explicit `parentRecordId` captured while the parent runtime context is active. The UI labels those runtime-ID joins `OBSERVED`; the automation action remains only a capture-window boundary, so action-to-record links stay `CORRELATED`. There is no hidden “likely” label presented as fact.
 
 The graph currently supports `UserAction`, `DOMEvent`, `EventListener`, `NetworkRequest`, `NetworkResponse`, `DOMMutation`, and `AsyncTask`. The schema also reserves typed nodes and relations for later debugger/source-map integrations.
 

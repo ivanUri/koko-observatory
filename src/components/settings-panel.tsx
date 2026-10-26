@@ -117,7 +117,7 @@ export function SettingsPanel() {
           <div className="settings-fields">
             <label className="settings-field"><span>Wait until</span><select value={draft.waitUntil} onChange={(event) => update("waitUntil", event.target.value as InspectWaitUntil)}>{waitOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
             <NumberField label="Wait timeout (ms)" value={draft.waitMs} onChange={(value) => update("waitMs", value)} />
-            <NumberField label="Background observation (ms)" value={draft.observeMs} onChange={(value) => update("observeMs", value)} />
+            <NumberField label="Runtime observation window (ms)" value={draft.observeMs} onChange={(value) => update("observeMs", value)} />
             <NumberField label="Terminate deadline (ms)" value={draft.terminateMs} onChange={(value) => update("terminateMs", value)} hint="0 disables the hard deadline" />
             <NumberField label="Maximum lazy scrolls" value={draft.maxScrolls} onChange={(value) => update("maxScrolls", value)} />
             <NumberField label="Scroll settle (ms)" value={draft.scrollSettleMs} onChange={(value) => update("scrollSettleMs", value)} />

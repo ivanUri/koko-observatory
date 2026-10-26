@@ -47,5 +47,108 @@
   margin: 4px 14px 12px;
 }
 
+.overviewPage :global(.forensics-panel) {
+  border-color: rgba(66, 201, 151, .28);
+  overflow: hidden;
+}
+
+.overviewPage :global(.forensics-panel--attention) {
+  border-color: rgba(236, 177, 77, .42);
+}
+
+.overviewPage :global(.forensics-panel--waiting) {
+  border-color: #2a3540;
+}
+
+.overviewPage :global(.forensics-badge) {
+  color: #55d5a4;
+  font: 9px var(--font-jetbrains), monospace;
+  letter-spacing: .08em;
+  white-space: nowrap;
+}
+
+.overviewPage :global(.forensics-panel--attention .forensics-badge) { color: #edb34f; }
+.overviewPage :global(.forensics-panel--waiting .forensics-badge) { color: #788693; }
+
+.overviewPage :global(.forensics-hero) {
+  display: flex;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 16px;
+  border-top: 1px solid #1d2a34;
+  border-bottom: 1px solid #1d2a34;
+  background: linear-gradient(120deg, rgba(66, 201, 151, .07), rgba(9, 19, 28, .2));
+}
+
+.overviewPage :global(.forensics-hero > div:first-child) { min-width: 0; display: grid; gap: 5px; }
+.overviewPage :global(.forensics-kicker) { color: #6f8490; font: 9px var(--font-jetbrains), monospace; text-transform: uppercase; letter-spacing: .08em; }
+.overviewPage :global(.forensics-hero strong) { color: #d8e3e8; font-size: 18px; }
+.overviewPage :global(.forensics-hero p) { max-width: 700px; margin: 0; color: #82909a; font-size: 11px; line-height: 1.5; }
+.overviewPage :global(.forensics-count) { display: grid; align-content: center; min-width: 92px; padding-left: 18px; border-left: 1px solid #30414b; }
+.overviewPage :global(.forensics-count strong) { color: #d7e3e8; font-size: 24px; }
+.overviewPage :global(.forensics-count span) { color: #71818c; font-size: 9px; line-height: 1.3; }
+.overviewPage :global(.forensics-bottleneck) { margin: 0 16px 12px; border: 1px solid #2b4750; background: #0a171d; }
+.overviewPage :global(.forensics-bottleneck--waiting) { border-color: #2d3942; background: #0c141b; }
+.overviewPage :global(.forensics-bottleneck--healthy) { border-color: #2b5045; background: #091916; }
+.overviewPage :global(.forensics-bottleneck > header) { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 12px 13px 0; }
+.overviewPage :global(.forensics-bottleneck > header > div) { display: grid; gap: 4px; min-width: 0; }
+.overviewPage :global(.forensics-bottleneck > header strong) { color: #d8e3e8; font-size: 13px; }
+.overviewPage :global(.forensics-confidence) { flex-shrink: 0; color: #78a695; font: 9px var(--font-jetbrains), monospace; text-transform: uppercase; }
+.overviewPage :global(.forensics-bottleneck > p) { margin: 6px 13px 10px; color: #8b9aa3; font-size: 10px; line-height: 1.45; }
+.overviewPage :global(.forensics-chain) { display: grid; gap: 1px; margin: 0 13px; border: 1px solid #22343d; background: #22343d; }
+.overviewPage :global(.forensics-chain__step) { display: grid; grid-template-columns: 21px minmax(0, 1fr) auto; align-items: center; gap: 8px; min-width: 0; padding: 8px 9px; background: #0b151c; }
+.overviewPage :global(.forensics-chain__index) { display: grid; place-items: center; width: 17px; height: 17px; border: 1px solid #3b6c5d; border-radius: 50%; color: #8fe0bd; font: 9px var(--font-jetbrains), monospace; }
+.overviewPage :global(.forensics-chain__step > div) { display: grid; gap: 2px; min-width: 0; }
+.overviewPage :global(.forensics-chain__step small) { color: #6f8490; font-size: 9px; text-transform: uppercase; letter-spacing: .05em; }
+.overviewPage :global(.forensics-chain__step strong) { overflow: hidden; color: #cbd8dd; font: 10px var(--font-jetbrains), monospace; text-overflow: ellipsis; white-space: nowrap; }
+.overviewPage :global(.forensics-chain__step button),
+.overviewPage :global(.forensics-bottleneck > footer a) { display: inline-flex; align-items: center; gap: 4px; border: 0; padding: 0; color: #57d6a5; background: transparent; font-size: 9px; text-decoration: none; cursor: pointer; }
+.overviewPage :global(.forensics-chain__step button:hover),
+.overviewPage :global(.forensics-bottleneck > footer a:hover) { color: #b9f4dc; }
+.overviewPage :global(.forensics-bottleneck > footer) { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 9px 13px 11px; color: #73828d; font-size: 9px; line-height: 1.4; }
+.overviewPage :global(.forensics-bottleneck > footer span) { min-width: 0; }
+.overviewPage :global(.forensics-findings) { display: grid; gap: 1px; background: #1d2a34; }
+.overviewPage :global(.forensics-finding) { display: flex; gap: 11px; padding: 13px 16px; background: #09131c; }
+.overviewPage :global(.forensics-finding__icon) { color: #edb34f; padding-top: 2px; }
+.overviewPage :global(.forensics-finding--critical .forensics-finding__icon) { color: #ff7777; }
+.overviewPage :global(.forensics-finding__body) { min-width: 0; flex: 1; }
+.overviewPage :global(.forensics-finding__top) { display: flex; align-items: center; gap: 10px; justify-content: space-between; }
+.overviewPage :global(.forensics-finding__top strong) { color: #d2dde2; font-size: 12px; }
+.overviewPage :global(.forensics-finding__top code) { color: #91e2bf; font: 10px var(--font-jetbrains), monospace; }
+.overviewPage :global(.forensics-finding p) { margin: 4px 0 8px; color: #7f8c96; font-size: 10px; line-height: 1.45; }
+.overviewPage :global(.forensics-evidence) { display: grid; gap: 5px; margin: 8px 0 9px; padding: 7px 8px; border-left: 2px solid #315b51; background: #0b171d; }
+.overviewPage :global(.forensics-evidence__label) { color: #6f9a8b; font: 9px var(--font-jetbrains), monospace; text-transform: uppercase; letter-spacing: .06em; }
+.overviewPage :global(.forensics-evidence__item) { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-width: 0; }
+.overviewPage :global(.forensics-evidence__item > div) { display: grid; gap: 2px; min-width: 0; }
+.overviewPage :global(.forensics-evidence__meta) { display: flex; align-items: baseline; gap: 6px; min-width: 0; color: #b6c8ce; font-size: 9px; }
+.overviewPage :global(.forensics-evidence__meta strong) { flex-shrink: 0; color: #7ed7b0; font: 9px var(--font-jetbrains), monospace; }
+.overviewPage :global(.forensics-evidence__meta span) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.overviewPage :global(.forensics-evidence__item code) { overflow: hidden; color: #607884; font: 8px var(--font-jetbrains), monospace; text-overflow: ellipsis; white-space: nowrap; }
+.overviewPage :global(.forensics-evidence a) { display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0; color: #57d6a5; font-size: 9px; text-decoration: none; }
+.overviewPage :global(.forensics-evidence a:hover) { color: #b9f4dc; }
+.overviewPage :global(.forensics-finding__actions) { display: flex; gap: 12px; }
+.overviewPage :global(.forensics-finding__actions button),
+.overviewPage :global(.forensics-finding__actions a),
+.overviewPage :global(.forensics-footer a) { display: inline-flex; align-items: center; gap: 4px; color: #57d6a5; background: transparent; border: 0; padding: 0; font-size: 10px; text-decoration: none; cursor: pointer; }
+.overviewPage :global(.forensics-finding__actions a:hover),
+.overviewPage :global(.forensics-finding__actions button:hover),
+.overviewPage :global(.forensics-footer a:hover) { color: #b9f4dc; }
+.overviewPage :global(.forensics-empty) { display: flex; gap: 10px; align-items: flex-start; padding: 17px 16px; color: #55d5a4; }
+.overviewPage :global(.forensics-empty strong), .overviewPage :global(.forensics-empty span) { display: block; }
+.overviewPage :global(.forensics-empty strong) { color: #cbd8dd; font-size: 12px; }
+.overviewPage :global(.forensics-empty span) { margin-top: 4px; color: #74828c; font-size: 10px; line-height: 1.4; }
+.overviewPage :global(.forensics-footer) { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 10px 16px; color: #657681; font-size: 10px; }
+
+@media (max-width: 640px) {
+  .overviewPage :global(.forensics-hero) { align-items: flex-start; padding: 13px; }
+  .overviewPage :global(.forensics-hero strong) { font-size: 15px; }
+  .overviewPage :global(.forensics-count) { min-width: 70px; padding-left: 10px; }
+  .overviewPage :global(.forensics-bottleneck) { margin-right: 13px; margin-left: 13px; }
+  .overviewPage :global(.forensics-bottleneck > footer) { align-items: flex-start; flex-direction: column; }
+  .overviewPage :global(.forensics-finding) { padding: 12px 13px; }
+  .overviewPage :global(.forensics-finding__top) { align-items: flex-start; flex-direction: column; gap: 4px; }
+  .overviewPage :global(.forensics-footer) { align-items: flex-start; flex-direction: column; }
+}
+
 /* Graph page typography is scoped here because graph nodes have a different
  * density from the dashboard and should not resize other pages. */

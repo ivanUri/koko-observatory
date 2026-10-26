@@ -102,29 +102,64 @@ server.on("connection", (socket) => {
       inspections = inspections.then(async () => {
         await drain();
         const options = withKnownSiteReadinessWait(requestedUrl, normalizeRunOptions(command.options));
-        activeInspection = createExecution("inspection", requestedUrl.href, undefined, options);
-        await beginTelemetry(activeInspection);
-        emitInspectionState("started");
-        try {
-          // Run the Core fetch path instead of SDK Page.goto. The CLI path
-          // owns the final Application storage snapshot, while JSONL remains
-          // streamed live through drain() as the page loads.
-          const dump = await runCoreInspection(command.url, undefined, activeInspection.options);
-          await drain();
-          emitSiteExport(dump.markdown, dump.html);
-          emitInspectionState("completed");
-        } catch (error) {
-          await drain();
-          const reason = typeof error?.message === "string" ? error.message : "Unknown navigation error";
-          emitInspectionState("failed", error, reason);
-          if (error?.code === "NAVIGATION_ERROR" || /CouldntResolveHost/i.test(reason)) {
-            console.warn(`Koko inspect stopped: ${reason} (${command.url})`);
-          } else {
-            console.error("Koko SDK inspect failed:", error);
+        let attempt = 0;
+        while (true) {
+          activeInspection = createExecution("inspection", requestedUrl.href, undefined, options);
+          activeInspection.attempt = attempt + 1;
+          await beginTelemetry(activeInspection);
+          emitInspectionState("started");
+          try {
+            // Run the Core fetch path instead of SDK Page.goto. The CLI path
+            // owns the final Application storage snapshot, while JSONL remains
+            // streamed live through drain() as the page loads.
+            const dump = await runCoreInspection(command.url, undefined, activeInspection.options);
+            await drain();
+            emitSiteExport(dump.markdown, dump.html);
+            emitInspectionState("completed");
+            executions.set(activeInspection.id, activeInspection);
+            activeInspection = null;
+            break;
+          } catch (error) {
+            await drain();
+            const reason = typeof error?.message === "string" ? error.message : "Unknown navigation error";
+            const retryableCrash = attempt < 2 && /SIGABRT|SIGSEGV|SIGBUS/i.test(reason);
+            if (retryableCrash) {
+              const failedAttempt = activeInspection;
+              broadcastEvent({
+                id: `${failedAttempt.id}:retrying:${Date.now()}`,
+                sessionId: failedAttempt.id,
+                sequence: ++lifecycleSequence,
+                timestamp: Date.now(),
+                duration: 0,
+                kind: "log",
+                name: "inspection-retrying",
+                status: "warning",
+                payload: {
+                  executionId: failedAttempt.id,
+                  inspectionId: failedAttempt.id,
+                  requestedUrl: failedAttempt.requestedUrl,
+                  attempt: failedAttempt.attempt,
+                  nextAttempt: failedAttempt.attempt + 1,
+                  reason,
+                  source: "koko-sdk",
+                },
+              });
+              executions.set(failedAttempt.id, failedAttempt);
+              activeInspection = null;
+              attempt += 1;
+              await new Promise((resolvePromise) => setTimeout(resolvePromise, 250 * attempt));
+              continue;
+            }
+            emitInspectionState("failed", error, reason);
+            if (error?.code === "NAVIGATION_ERROR" || /CouldntResolveHost/i.test(reason)) {
+              console.warn(`Koko inspect stopped: ${reason} (${command.url})`);
+            } else {
+              console.error("Koko SDK inspect failed:", error);
+            }
+            executions.set(activeInspection.id, activeInspection);
+            activeInspection = null;
+            break;
           }
-        } finally {
-          executions.set(activeInspection.id, activeInspection);
-          activeInspection = null;
         }
       })
         .catch((error) => {
@@ -532,7 +567,7 @@ function emitReverseEvent(name, payload = {}, status = "ok") {
       ...payload,
       sessionId: automationSession.id,
       requestedUrl: automationSession.url,
-      reverseSchemaVersion: 1,
+      reverseSchemaVersion: 2,
       source: "koko-reverse-engine",
     },
   });

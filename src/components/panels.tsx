@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Accessibility, Activity, AlertTriangle, CircleDot, Clock3, Cpu, Database, Gauge, GitBranch, Grid3x3, List, Network, Share2, Waypoints, Wifi, X, Zap } from "lucide-react";
 import { RealtimeChart } from "@/src/components/realtime-chart";
+import { TimelineChart, type TimelineChartEvent } from "@/src/components/timeline-chart";
 import styles from "@/src/components/overview-panel.module.css";
 import graphStyles from "@/src/components/graph-panel.module.css";
 import networkStyles from "@/src/components/network-panel.module.css";
@@ -13,6 +14,8 @@ import type { TelemetryEvent } from "@/src/core/types";
 import { bucketEventRate, eventsPerSecond, metricCategory, percentile, isMeasuredEvent, utf8ByteLength } from "@/src/core/metrics";
 import { aggregateNetworkRequests, matchesNetworkType, networkStageOrder, type NetworkRequestSummary } from "@/src/core/network-metrics";
 import { downloadChromeTrace } from "@/src/core/trace";
+import { diagnoseRuntime } from "@/src/core/forensics";
+import { RuntimeForensicsPanel } from "@/src/components/runtime-forensics-panel";
 
 const ExecutionGraph = dynamic(
   () => import("@/src/components/execution-graph").then((module) => module.ExecutionGraph),
@@ -55,6 +58,7 @@ export function OverviewPanel() {
   const diskWrite = numberPayload(latestSample?.payload, "diskWriteBytes");
   const p95 = percentile(measured.map((event) => event.duration), .95);
   const webVitals = useMemo(() => latestWebVitals(scoped), [scoped]);
+  const forensics = useMemo(() => diagnoseRuntime(scoped), [scoped]);
   const accessibility = useMemo(() => latestAccessibility(scoped), [scoped]);
   const probeCount = scoped.filter((event) => event.payload.probe === true).length;
   const statusTotal = Math.max(scoped.length, 1);
@@ -122,9 +126,20 @@ export function OverviewPanel() {
     "load",
     "domstable",
     "networkidle",
-    "background",
+    "observing",
     "completed",
   ] as const;
+  const browserStepLabels: Record<typeof browserSteps[number], string> = {
+    queued: "Queued",
+    started: "Starting inspection",
+    receiving: "Receiving document",
+    domcontentloaded: "DOMContentLoaded",
+    load: "Load",
+    domstable: "DOM stable",
+    networkidle: "Network idle",
+    observing: "Observing runtime",
+    completed: "Inspection complete",
+  };
   const reached = new Set<string>();
   if (hasTelemetry) reached.add("queued");
   if (hasInspectionState("started")) reached.add("started");
@@ -133,19 +148,20 @@ export function OverviewPanel() {
   if (hasLifecycle("load")) reached.add("load");
   if (hasLifecycle("domstable")) reached.add("domstable");
   if (hasLifecycle("networkidle")) reached.add("networkidle");
-  // Background observation begins after the browser lifecycle milestones. Do
-  // not jump to it merely because the first DOM snapshot arrived: the active
-  // label should move only when the next pipeline step is evidenced.
-  if (hasLifecycle("networkidle") && !completed && !failed) reached.add("background");
+  // Runtime observation is intentionally shown as a product state rather than
+  // exposing the implementation detail that collection continues in the
+  // background. Once the document reaches a lifecycle milestone, Koko keeps
+  // collecting evidence without making the user think the page is stuck.
+  if ((hasLifecycle("domcontentloaded") || hasLifecycle("load")) && !completed && !failed) reached.add("observing");
   if (completed) reached.add("completed");
   const activeStepIndex = browserSteps.reduce((index, step, candidate) => reached.has(step) ? candidate : index, 0);
   const browserState = failed
-    ? "failed"
+    ? "Inspection failed"
     : completed
-      ? "completed"
+      ? "Inspection complete"
       : hasTelemetry
-        ? browserSteps[activeStepIndex]
-        : "waiting for inspection";
+        ? browserStepLabels[browserSteps[activeStepIndex]]
+        : "Waiting for inspection";
 
   return (
     <PanelFrame
@@ -164,7 +180,7 @@ export function OverviewPanel() {
             <div className="inspection-steps">
               {browserSteps.map((step, i) => (
                 <span key={step} className={`inspection-step${i < activeStepIndex || reached.has(step) ? " inspection-step--done" : ""}${i === activeStepIndex ? " inspection-step--active" : ""}`}>
-                  {step}
+                  {browserStepLabels[step]}
                 </span>
               ))}
             </div>
@@ -184,6 +200,8 @@ export function OverviewPanel() {
         <Metric label="Disk read" value={diskRead == null ? "—" : formatBytes(diskRead)} delta={diskRead == null ? "Signal unavailable" : "cumulative bytes read"} icon={Database} />
         <Metric label="Disk write" value={diskWrite == null ? "—" : formatBytes(diskWrite)} delta={diskWrite == null ? "Signal unavailable" : "cumulative bytes written"} icon={Database} />
       </div>
+
+      <RuntimeForensicsPanel report={forensics} events={scoped} />
 
       <section className="panel-card monitor-panel">
         <CardHeader title="Page experience signals" subtitle="Web Vitals, rrweb and OpenTelemetry collected by the injected probe" icon={Zap} />
@@ -367,8 +385,18 @@ export function TimelinePanel() {
     const peak = Math.max(...buckets, 1);
     return buckets.map((value) => Math.max(8, Math.round(value / peak * 100)));
   }, [filtered, range, start]);
-  const tick = (ratio: number) => formatTimelineOffset(range * ratio);
   const bufferLabel = filtered.length ? `${filtered.length.toLocaleString()} signals · ${formatTimelineOffset(range)} window` : "Waiting for telemetry";
+  const chartEvents: TimelineChartEvent[] = filtered.map((event) => ({
+    id: event.id,
+    lane: event.kind,
+    timestamp: event.timestamp,
+    duration: event.duration,
+    status: event.status,
+    name: event.name,
+    kind: event.kind,
+    journey: classifyJourney(event),
+    sessionId: event.sessionId,
+  }));
   return (
     <PanelFrame className="timeline-workspace" eyebrow="Observatory / All telemetry" title="Global Timeline" description="Normalized telemetry signals across browser, runtime and network, in chronological order." actions={<div className="timeline-header-actions"><LivePill /><span>{bufferLabel}</span></div>}>
       <section className="global-timeline-summary">
@@ -385,32 +413,10 @@ export function TimelinePanel() {
         <label><span>Session</span><select className="select-control" value={session} onChange={(event) => setSession(event.target.value)}><option value="all">All sessions</option>{sessions.map((value) => <option key={value}>{value}</option>)}</select></label>
         <button type="button" onClick={() => { setQuery(""); setKind("all"); setStatus("all"); setJourney("all"); setSession("all"); }}>Reset</button>
       </section>
-      <div className="timeline-shell">
+      <section className="timeline-shell">
         <div className="timeline-shell__topline"><strong>Signal density</strong><div className="timeline-legend"><span><i className="timeline-legend__dot timeline-legend__dot--ok" />OK {healthy.toLocaleString()}</span><span><i className="timeline-legend__dot timeline-legend__dot--warning" />Warning {warnings.toLocaleString()}</span><span><i className="timeline-legend__dot timeline-legend__dot--error" />Error {errors.toLocaleString()}</span></div></div>
-        <div className="timeline-ruler">
-          {[0, .2, .4, .6, .8, 1].map((ratio) => <span key={ratio}>{tick(ratio)}</span>)}
-        </div>
-        <div className="timeline-lanes">
-          {lanes.map((laneKind) => (
-            <div className="timeline-lane" key={laneKind}>
-              <span className="timeline-label">{laneKind}<small>{filtered.filter((event) => event.kind === laneKind).length}</small></span>
-              <div className="timeline-track">
-                {filtered.filter((event) => event.kind === laneKind).map((event) => (
-                  <button
-                    type="button"
-                    key={event.id}
-                    onClick={() => select(event.id)}
-                    title={`${event.name} · ${event.duration.toFixed(3)} ms · ${classifyJourney(event)}`}
-                    className={`timeline-span timeline-span--${event.status} ${selectedId === event.id ? "timeline-span--selected" : ""}`}
-                    style={{ left: `${Math.max(0, (event.timestamp - start) / range * 100)}%`, width: `${Math.max(.25, Math.min(100, event.duration / range * 100))}%` }}
-                  />
-                ))}
-              </div>
-            </div>
-          ))}
-          {!filtered.length && <div className="empty-row">No telemetry matches the current filters.</div>}
-        </div>
-      </div>
+        <TimelineChart events={chartEvents} lanes={lanes} start={start} end={end} selectedId={selectedId} onSelect={select} />
+      </section>
       <div className="global-timeline-layout">
         <section className="panel-card global-timeline-events"><header><div><strong>Chronological events</strong><small>Latest signals first</small></div><span>{filtered.length.toLocaleString()} matching signals</span></header><div className="event-table" role="table"><div className="event-row event-row--header" role="row"><span>Signal</span><span>Journey / kind</span><span>Time</span><span>Duration</span><span>Status</span><span>Session</span></div>{filtered.length ? [...filtered].reverse().slice(0, 250).map((event) => <button type="button" className={`event-row global-event-row ${selectedId === event.id ? "global-event-row--selected" : ""}`} role="row" key={event.id} onClick={() => select(event.id)}><span><i className={`event-dot event-dot--${event.status}`}/>{event.name}</span><span><b>{classifyJourney(event)}</b><small>{event.kind}</small></span><span className="mono">+{formatTimelineOffset(event.timestamp-start)}</span><span className="mono">{event.duration.toFixed(3)} ms</span><span className={`status-text status-text--${event.status}`}>{event.status}</span><span className="mono timeline-session">{event.sessionId}</span></button>) : <div className="empty-row">No matching events.</div>}</div></section>
         <aside className="panel-card global-timeline-detail">{selected ? <TimelineEventDetails event={selected} onClose={() => select(undefined)}/> : <div className="global-timeline-detail__empty"><CircleDot size={20}/><strong>Select an event</strong><span>Inspect timing, ownership, journey classification, relationships and the complete typed payload.</span></div>}</aside>
@@ -864,6 +870,12 @@ export function NetworkPanel() {
     const requestedExecution = new URLSearchParams(window.location.search).get("execution");
     if (requestedExecution) setExecution(requestedExecution);
   }, []);
+  useEffect(() => {
+    const requestedEvent = new URLSearchParams(window.location.search).get("event");
+    if (!requestedEvent) return;
+    const request = requests.find((candidate) => candidate.events.some((event) => event.id === requestedEvent));
+    if (request) setSelectedKey(request.key);
+  }, [requests]);
   const visible = useMemo(() => requests.filter((request) => {
     const text = `${request.url} ${request.method} ${request.protocol} ${request.remoteIp} ${request.statusCode ?? ""} ${request.terminalStatus} ${request.executionId}`.toLowerCase();
     const typeMatch = matchesNetworkType(typeFilter, request);

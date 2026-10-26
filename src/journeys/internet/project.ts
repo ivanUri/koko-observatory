@@ -20,6 +20,25 @@ export interface InspectionProjection {
   activeUrl?: string;
 }
 
+export interface InternetJourneyAssessment {
+  state: "incomplete" | "healthy" | "attention";
+  headline: string;
+  summary: string;
+  stage?: string;
+  value?: string;
+  evidenceId?: string;
+}
+
+// These are explicit diagnostic budgets for the top-level document only. They
+// are not claims about a site's ideal performance or about third-party work.
+const internetStageBudgets: Record<string, number> = {
+  dns: 200,
+  tcp: 200,
+  tls: 300,
+  server: 500,
+  response: 1_000,
+};
+
 interface ApplyResult {
   navigationRequestId?: string;
   activeUrl?: string;
@@ -67,6 +86,68 @@ export function cloneJourneyNodes(nodes: JourneyNode[]): JourneyNode[] {
       practices: [...node.metadata.practices],
     },
   }));
+}
+
+/**
+ * Summarize only the top-level document transport represented by Internet
+ * Journey nodes. Browser/runtime evidence is intentionally left to the next
+ * journey so this result cannot accidentally claim a cross-layer root cause.
+ */
+export function assessInternetJourney(nodes: JourneyNode[]): InternetJourneyAssessment {
+  const received = nodes.find((node) => node.id === "received");
+  const measured = ["dns", "tcp", "tls", "server", "response"].flatMap((id) => {
+    const node = nodes.find((candidate) => candidate.id === id);
+    return node && node.status === "complete" && node.metadata.measurement === "measured" ? [node] : [];
+  });
+  const failed = nodes.find((node) => node.status === "error");
+  if (failed) {
+    return {
+      state: "attention",
+      headline: `${failed.title} failed`,
+      summary: failed.metadata.explanation,
+      stage: failed.id,
+      evidenceId: evidenceIdOf(failed),
+    };
+  }
+  if (received?.status === "complete") {
+    const status = Number(summaryValue(nodes.find((node) => node.id === "response"), "Status"));
+    if (Number.isFinite(status) && status >= 400) {
+      const response = nodes.find((node) => node.id === "response");
+      return {
+        state: "attention",
+        headline: `Document returned HTTP ${status}`,
+        summary: `The top-level document completed with HTTP ${status}. Open the response evidence for the server's status and headers.`,
+        stage: "response",
+        value: String(status),
+        evidenceId: evidenceIdOf(response),
+      };
+    }
+  }
+  if (!measured.length) {
+    return {
+      state: "incomplete",
+      headline: "Waiting for document transport evidence",
+      summary: "Internet Journey has not received enough measured top-level stages to assess the document request.",
+    };
+  }
+  const slow = measured
+    .filter((node) => (internetStageBudgets[node.id] ?? Infinity) <= node.duration)
+    .sort((left, right) => right.duration - left.duration)[0];
+  if (slow) {
+    return {
+      state: "attention",
+      headline: `Slow ${slow.title} stage observed`,
+      summary: `${slow.title} took ${slow.duration.toFixed(3)} ms for the top-level document. This is a transport bottleneck candidate; Browser Journey is needed to assess later rendering work.`,
+      stage: slow.id,
+      value: `${slow.duration.toFixed(3)} ms`,
+      evidenceId: evidenceIdOf(slow),
+    };
+  }
+  return {
+    state: "healthy",
+    headline: "Document transport within diagnostic budgets",
+    summary: "DNS, connection, TLS, server and response stages were measured without a covered threshold breach.",
+  };
 }
 
 /** Duration label for a stage that happened and was empty, rather than a missing measurement. */
@@ -228,7 +309,17 @@ function selectLatest(groups: Map<string, TelemetryEvent[]>) {
 }
 
 function summaryValue(model: JourneyNode, label: string) {
-  return model.metadata.summary.find((item) => item.label === label)?.value;
+  return model?.metadata.summary.find((item) => item.label === label)?.value;
+}
+
+function evidenceIdOf(model: JourneyNode | undefined) {
+  if (!model?.metadata.raw) return undefined;
+  try {
+    const raw = JSON.parse(model.metadata.raw) as { event?: { id?: unknown } };
+    return typeof raw.event?.id === "string" ? raw.event.id : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function text(value: unknown) {
