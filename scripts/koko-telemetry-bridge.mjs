@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 import { WebSocketServer, WebSocket } from "ws";
 import { selectDocumentResponse } from "../src/core/document-transfer.ts";
+import { REVERSE_RUNTIME_PROBE } from "../src/reverse/runtime-probe.ts";
 
 const workspaceRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const kokoDataRoot = process.env.KOKO_DATA_ROOT ? resolve(process.env.KOKO_DATA_ROOT) : resolve(workspaceRoot, "../koko-core");
@@ -14,6 +15,7 @@ const port = Number(process.env.KOKO_TELEMETRY_PORT ?? 9223);
 const automationPort = Number(process.env.KOKO_AUTOMATION_MCP_PORT ?? 9224);
 const clients = new Set();
 const kokoBinary = process.env.KOKO_BINARY ?? resolve(kokoDataRoot, "zig-out/bin/koko");
+const probeBundle = resolve(workspaceRoot, "public/generated/koko-observatory-probe.js");
 await Promise.all([
   mkdir(executionRoot, { recursive: true }),
 ]);
@@ -46,6 +48,7 @@ const DEFAULT_RUN_OPTIONS = Object.freeze({
   cookiePath: "",
   cookieJson: "",
   includeFrames: false,
+  accessibilityAudit: true,
 });
 
 const server = new WebSocketServer({ host: "127.0.0.1", port, path: "/telemetry" });
@@ -242,7 +245,10 @@ async function startAutomationSession(command) {
       },
     });
     await automationRpc({ jsonrpc: "2.0", method: "notifications/initialized", params: {} }, initialized.sessionId);
-    automationSession = { id, child, dataDirectory, sessionId: initialized.sessionId, url: "", title: "" };
+    automationSession = { id, child, dataDirectory, sessionId: initialized.sessionId, url: "", title: "", reverseEnabled: command.reverse === true };
+    if (automationSession.reverseEnabled) {
+      await automationCall("addInitScript", { script: REVERSE_RUNTIME_PROBE });
+    }
     // A newly initialized MCP session has no page yet. Discovery APIs require
     // currentFrame(), so only take a snapshot after the first navigation.
     emitAutomationEvent("automation-session-started", "ok", {
@@ -258,6 +264,10 @@ async function startAutomationSession(command) {
       automationSession.url = state.url;
       automationSession.title = state.title;
       emitAutomationEvent("automation-discovery-ready", "ok", { sessionId: id, ...state });
+      if (automationSession.reverseEnabled) {
+        await drainReverseRuntime();
+        emitReverseEvent("reverse-session-started", { requestedUrl: state.url, title: state.title, mode: "targeted", capabilities: ["dom-events", "event-listeners", "network", "dom-mutations", "async-tasks"] });
+      }
     }
   } catch (error) {
     if (!child.killed) child.kill("SIGTERM");
@@ -300,11 +310,21 @@ async function executeAutomationStep(step) {
   emitAutomationEvent("automation-step-started", "ok", { sessionId: automationSession.id, stepId: step.id, step: safeStep });
   let marker;
   try {
+    if (automationSession.reverseEnabled) await drainReverseRuntime();
     const args = await automationArguments(step);
     marker = args._automationMarker;
     const toolArguments = { ...args };
     delete toolArguments._automationMarker;
     await automationCall(actionToolName(step.action), toolArguments);
+    if (automationSession.reverseEnabled) {
+      const evidence = await drainReverseRuntime();
+      emitReverseEvent("reverse-evidence-batch", {
+        actionId: step.id,
+        action: safeStep,
+        evidence,
+        collection: { mechanism: "page-runtime-probe", bounded: true, maxRecords: 400 },
+      });
+    }
     const state = await automationSnapshot();
     automationSession.url = state.url;
     automationSession.title = state.title;
@@ -496,6 +516,39 @@ function emitAutomationEvent(name, status, payload = {}, duration = 0) {
   broadcastEvent({ id: `automation:${name}:${timestamp}:${Math.random().toString(36).slice(2, 7)}`, sessionId: automationSession?.id ?? "automation", sequence: ++lifecycleSequence, timestamp, duration, kind: "log", name, status, payload: { ...payload, source: "koko-observatory" } });
 }
 
+function emitReverseEvent(name, payload = {}, status = "ok") {
+  if (!automationSession) return;
+  const timestamp = Date.now();
+  broadcastEvent({
+    id: `reverse:${automationSession.id}:${name}:${timestamp}:${Math.random().toString(36).slice(2, 7)}`,
+    sessionId: automationSession.id,
+    sequence: ++lifecycleSequence,
+    timestamp,
+    duration: 0,
+    kind: "javascript",
+    name,
+    status,
+    payload: {
+      ...payload,
+      sessionId: automationSession.id,
+      requestedUrl: automationSession.url,
+      reverseSchemaVersion: 1,
+      source: "koko-reverse-engine",
+    },
+  });
+}
+
+async function drainReverseRuntime() {
+  const result = await automationCall("evaluate", { script: "window.__kokoReverseRuntime?.drain?.() ?? '[]'" });
+  const raw = extractToolText(result) ?? "[]";
+  let value = raw;
+  try { value = JSON.parse(raw); } catch { /* the MCP result may already be plain text */ }
+  if (typeof value === "string") {
+    try { value = JSON.parse(value); } catch { value = []; }
+  }
+  return Array.isArray(value) ? value.slice(0, 400) : [];
+}
+
 async function beginTelemetry(execution) {
   await mkdir(dirname(execution.telemetryFile), { recursive: true });
   telemetrySource = { path: execution.telemetryFile, offset: 0, pending: "" };
@@ -530,6 +583,7 @@ function normalizeRunOptions(raw) {
     cookiePath: text(source.cookiePath),
     cookieJson: typeof source.cookieJson === "string" ? source.cookieJson.trim() : "",
     includeFrames: source.includeFrames === true,
+    accessibilityAudit: source.accessibilityAudit !== false,
   };
 }
 
@@ -569,6 +623,12 @@ async function prepareRunOptions(options) {
   if (!activeInspection) return files;
   await mkdir(activeInspection.optionsDirectory, { recursive: true });
   files.html = resolve(activeInspection.optionsDirectory, "site.html");
+  files.probe = resolve(activeInspection.optionsDirectory, "probe.js");
+  const probe = await readFile(probeBundle, "utf8");
+  const probeOptions = JSON.stringify({ accessibilityAudit: options.accessibilityAudit !== false });
+  // The config must precede the bundled probe because Core evaluates the
+  // injected file before the document parser starts.
+  await writeFile(files.probe, `window.__kokoProbeOptions=${probeOptions};\n${probe}`, "utf8");
   if (options.extraHeaders) {
     files.extraHeaders = resolve(activeInspection.optionsDirectory, "extra-headers.txt");
     await writeFile(files.extraHeaders, `${options.extraHeaders}\n`, "utf8");
@@ -607,6 +667,7 @@ function runCoreInspection(url, replay, options = activeInspection?.options ?? D
     const insertBeforeUrl = (values) => args.push(...values);
     if (options.waitSelector) insertBeforeUrl(["--wait-selector", options.waitSelector]);
     if (options.waitScript) insertBeforeUrl(["--wait-script", options.waitScript]);
+    if (files.probe) insertBeforeUrl(["--inject-script-file", files.probe]);
     if (options.userAgent) insertBeforeUrl(["--user-agent", options.userAgent]);
     if (files.cookie) insertBeforeUrl(["--cookie", files.cookie]);
     else if (options.cookiePath) insertBeforeUrl(["--cookie", resolveLocalPath(options.cookiePath)]);

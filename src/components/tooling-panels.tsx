@@ -84,7 +84,12 @@ function InspectorOverview({ event, parent, childEvents, onSelect }: { event: Te
 }
 
 function InspectorFact({ label, value }: { label: string; value: string }) { return <div><small>{label}</small><strong>{value}</strong></div>; }
-function journeyForEvent(event: TelemetryEvent) { if (typeof event.payload.systemStage === "string" || event.kind === "memory") return "System Journey"; if (typeof event.payload.browserStage === "string" || ["dom", "javascript", "render"].includes(event.kind)) return "Browser Journey"; if (typeof event.payload.journeyStage === "string" || ["network", "navigation"].includes(event.kind)) return "Internet Journey"; return "Runtime"; }
+function journeyForEvent(event: TelemetryEvent) {
+  if (typeof event.payload.systemStage === "string" || event.kind === "memory") return "System Journey";
+  if (event.payload.probe !== true && (typeof event.payload.browserStage === "string" || event.kind === "javascript" || (event.kind === "network" && ["response", "received"].includes(String(event.payload.journeyStage ?? ""))))) return "Browser Journey";
+  if (typeof event.payload.journeyStage === "string" || ["network", "navigation"].includes(event.kind)) return "Internet Journey";
+  return "Runtime";
+}
 function payloadType(value: unknown) { if (value === null) return "null"; if (Array.isArray(value)) return "array"; return typeof value; }
 function formatInspectorValue(value: unknown) { if (value == null) return String(value); if (typeof value === "object") return JSON.stringify(value); return String(value); }
 function shortTime(value: number) { return new Date(value).toLocaleTimeString([], { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" }); }

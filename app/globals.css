@@ -12,9 +12,25 @@
   --primary: oklch(0.7 0.18 170);
   --accent: oklch(0.65 0.15 150);
   --primary-soft: oklch(0.7 0.18 170 / .12);
+  --ui-space-1: 4px;
+  --ui-space-2: 8px;
+  --ui-space-3: 12px;
+  --ui-space-4: 16px;
+  --ui-space-5: 20px;
+  --ui-control-height: 36px;
+  --ui-body-size: 13px;
+  --ui-meta-size: 12px;
+  --ui-micro-size: 11px;
+  --ui-radius: 3px;
 }
 
 .application-origin { display: inline-flex; align-items: center; gap: 8px; max-width: 360px; color: var(--muted); font: 12px var(--font-jetbrains), monospace; }
+.page-replay-stage { position: relative; min-height: 480px; overflow: hidden; }
+.page-replay-stage .replayer-wrapper { position: relative; }
+.page-replay-stage .replayer-mouse { position: absolute; }
+.page-replay-stage .replayer-mouse-tail { position: absolute; pointer-events: none; }
+.page-replay-stage iframe { display: block; border: 0; }
+.page-replay-static { display: block; width: 100%; min-height: 720px; border: 0; background: #fff; }
 .application-origin span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .application-header-controls { display: flex; align-items: center; justify-content: flex-end; gap: 12px; min-width: 0; }
 .application-session { display: grid; gap: 3px; color: #61707b; font: 8px var(--font-jetbrains), monospace; text-transform: uppercase; }
@@ -2425,6 +2441,44 @@
   .global-timeline-summary { grid-template-columns: 1fr 1fr }
   .global-timeline-filters { grid-template-columns: 1fr }
 }
+
+.reverse-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; }
+.reverse-header h1 { margin: 2px 0 5px; color: #dce5eb; font: 24px var(--font-inter), sans-serif; }
+.reverse-header p { margin: 0; color: #71808b; font-size: 11px; line-height: 1.5; }
+.reverse-header-actions, .reverse-export-actions { display: flex; align-items: center; gap: 8px; }
+.reverse-header-actions button, .reverse-export-actions button, .reverse-source-card .card-header button { display: inline-flex; align-items: center; gap: 6px; }
+.reverse-control-card { display: grid; gap: 14px; }
+.reverse-control-grid { display: grid; grid-template-columns: minmax(220px, 1.6fr) repeat(3, minmax(110px, .7fr)) minmax(150px, 1fr) auto; align-items: end; gap: 10px; }
+.reverse-control-grid label { display: grid; gap: 6px; color: #87a8a5; font: 10px var(--font-jetbrains), monospace; text-transform: uppercase; }
+.reverse-control-grid input, .reverse-control-grid select { min-width: 0; height: 34px; border: 1px solid #29414a; background: #07151b; color: #d8ece7; padding: 0 9px; border-radius: 3px; }
+.reverse-control-grid .primary-button { height: 34px; white-space: nowrap; }
+.reverse-session-meta { display: flex; flex-direction: column; gap: 3px; border-top: 1px solid #1d3038; padding-top: 11px; color: #d4e6e2; }
+.reverse-session-meta small { color: #78908f; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.reverse-summary { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.reverse-layout { display: grid; grid-template-columns: minmax(240px, .8fr) minmax(300px, 1.2fr); gap: 14px; align-items: start; }
+.reverse-evidence-card, .reverse-graph-card, .reverse-source-card { min-height: 290px; overflow: hidden; }
+.reverse-source-card { grid-column: 1 / -1; }
+.reverse-evidence-list, .reverse-graph-list { max-height: 390px; overflow: auto; }
+.reverse-evidence-list > button { display: grid; grid-template-columns: auto 1fr; gap: 4px 8px; width: 100%; border: 0; border-bottom: 1px solid #192d35; background: transparent; color: #b8cdca; padding: 10px 12px; text-align: left; cursor: pointer; }
+.reverse-evidence-list > button:hover, .reverse-evidence-list > button.active { background: #0c2329; }
+.reverse-evidence-list strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.reverse-evidence-list small { grid-column: 2; color: #718a89; font: 10px var(--font-jetbrains), monospace; }
+.reverse-class { align-self: start; border: 1px solid #42635e; padding: 2px 4px; color: #78d9a5; font: 9px var(--font-jetbrains), monospace; }
+.reverse-class--correlated { border-color: #80652e; color: #e6bb65; }
+.reverse-class--inferred, .reverse-class--unknown { border-color: #65456d; color: #d69ee3; }
+.reverse-edge { display: grid; gap: 4px; border-bottom: 1px solid #192d35; padding: 10px 12px; }
+.reverse-edge strong { color: #8ce0b0; font: 11px var(--font-jetbrains), monospace; }
+.reverse-edge span { color: #c1d2ce; overflow-wrap: anywhere; }
+.reverse-edge small { color: #798f8e; font: 10px var(--font-jetbrains), monospace; }
+.reverse-schema-badge { color: #77bfba; font: 10px var(--font-jetbrains), monospace; }
+.reverse-source-location { display: grid; gap: 3px; padding: 11px 14px; border-bottom: 1px solid #1d3038; }
+.reverse-source-location strong { color: #c5e2d9; }
+.reverse-source-location span { color: #788e8e; font: 10px var(--font-jetbrains), monospace; overflow-wrap: anywhere; }
+.reverse-limitations { margin-top: 14px; }
+.reverse-limitations ul { margin: 0; padding: 0 18px 15px 34px; color: #98aaa8; }
+.reverse-limitations li { margin: 7px 0; }
+@media (max-width: 1100px) { .reverse-control-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (max-width: 720px) { .reverse-layout { grid-template-columns: 1fr; } .reverse-source-card { grid-column: auto; } .reverse-summary { grid-template-columns: 1fr 1fr; } .reverse-control-grid { grid-template-columns: 1fr 1fr; } .reverse-control-grid label:last-of-type, .reverse-control-grid .primary-button { grid-column: 1 / -1; } }
 
 .toolbar {
   display: flex;
@@ -7267,4 +7321,249 @@
   .timeline-workspace .global-timeline-summary { grid-template-columns: 1fr 1fr; }
   .timeline-workspace .global-timeline-filters { grid-template-columns: 1fr; }
   .timeline-legend { gap: 7px; }
+}
+
+/* -------------------------------------------------------------------------
+   Observatory UI refinement layer
+   Shared readability and responsive rules live here so new panels inherit
+   the same control, type and overflow behavior.
+   ------------------------------------------------------------------------- */
+.observatory,
+.observatory * { box-sizing: border-box; }
+
+.observatory {
+  min-width: 0;
+  overflow-x: hidden;
+  font-size: var(--ui-body-size);
+  line-height: 1.45;
+}
+
+.main-shell {
+  width: 100%;
+  min-width: 0;
+  overflow-x: hidden;
+}
+
+.workspace {
+  width: 100%;
+  min-width: 0;
+  gap: var(--ui-space-3);
+}
+
+.sidebar,
+.sidebar-footer,
+.nav-section,
+.nav-item,
+.runtime-control { min-width: 0; }
+
+.nav-item {
+  font-size: 13px;
+  line-height: 1.25;
+}
+
+.nav-item em { font-size: 11px; }
+
+.global-inspector__bar { min-height: 56px; }
+.global-inspector input {
+  height: var(--ui-control-height);
+  font-size: 13px;
+}
+.global-inspector button {
+  min-height: var(--ui-control-height);
+  height: var(--ui-control-height);
+  font-size: 13px;
+}
+
+.observatory input:not([type="checkbox"]):not([type="radio"]),
+.observatory select,
+.observatory textarea {
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.observatory button {
+  font-size: 13px;
+  line-height: 1.3;
+}
+
+.observatory .icon-button {
+  width: 32px;
+  min-width: 32px;
+  height: 32px;
+  min-height: 32px;
+}
+
+.observatory :is(input, select, textarea, button):focus-visible {
+  outline: 2px solid #55d57d;
+  outline-offset: 2px;
+}
+
+.metric-top,
+.dashboard-controls label,
+.overview-context,
+.journey-card__name,
+.journey-card__err,
+.journey-card__warn,
+.card-header p,
+.global-timeline-summary span,
+.global-timeline-summary small,
+.health-row > div:first-child {
+  font-size: var(--ui-meta-size);
+}
+
+.metric-card > strong { font-size: 20px; }
+.metric-card .delta { font-size: var(--ui-meta-size); line-height: 1.35; }
+.card-header { min-height: 52px; padding: 12px 14px 10px; }
+.card-header h2 { font-size: 15px; }
+.card-header p { line-height: 1.45; }
+
+.overview-context {
+  min-width: 0;
+  line-height: 1.4;
+}
+.overview-context > div { min-width: 0; }
+.dashboard-controls { min-width: 0; flex-wrap: wrap; }
+.dashboard-controls label { min-width: 0; min-height: 32px; height: auto; padding: 6px 8px; }
+.dashboard-controls select { min-width: 0; max-width: 100%; font-size: 13px; }
+.journey-card__name { letter-spacing: .03em; }
+.journey-card__count { font-size: 14px; }
+.journey-card__meta { font-size: var(--ui-meta-size); line-height: 1.4; }
+
+.event-table,
+.global-timeline-layout,
+.network-layout,
+.graph-layout,
+.automation-layout,
+.settings-layout,
+.system-layout,
+.reverse-layout { min-width: 0; }
+
+.event-table > header,
+.event-table > div { font-size: var(--ui-meta-size); }
+.event-table > div { min-height: 42px; }
+.global-timeline-filters label,
+.global-timeline-filters .search-input,
+.global-timeline-filters .select-control,
+.global-timeline-filters button { min-height: var(--ui-control-height); font-size: 13px; }
+
+.graph-view-tabs button,
+.graph-filters--inline > label,
+.graph-filters--inline > button,
+.graph-mode-context,
+.graph-mode-context strong { font-size: var(--ui-meta-size); }
+.graph-node > header strong { font-size: 12px; }
+.graph-node > header small,
+.graph-node > header > b,
+.graph-node__context span,
+.graph-node__facts small,
+.graph-node__facts code,
+.graph-edge-label { font-size: var(--ui-micro-size); }
+.graph-event-detail dt,
+.graph-event-detail dd,
+.graph-quality span,
+.graph-roots > span { font-size: var(--ui-meta-size); }
+
+.system-table,
+.system-table th,
+.system-table td,
+.system-empty span,
+.system-samples p,
+.system-graphics article > small,
+.system-graphics article > p { font-size: var(--ui-meta-size); }
+
+.automation-session-url label,
+.automation-session-meta span,
+.automation-field > span,
+.automation-locator > span,
+.automation-workflow-settings label,
+.automation-editor-heading span { font-size: var(--ui-meta-size); }
+.automation-session-url input,
+.automation-field input,
+.automation-field select,
+.automation-locator input,
+.automation-locator select,
+.automation-workflow-settings input,
+.automation-discovery-toolbar input { height: var(--ui-control-height); font-size: 13px; }
+.automation-session-actions button,
+.automation-builder-actions button,
+.automation-editor-heading button,
+.automation-discovery-toolbar button,
+.automation-add-actions button { min-height: 34px; font-size: 13px; }
+.automation-workflow-list small,
+.automation-step-main small,
+.automation-element-list small,
+.automation-snapshot > button,
+.automation-snapshot pre { font-size: var(--ui-meta-size); }
+
+.settings-field,
+.settings-section .card-header p,
+.settings-field > small,
+.settings-field > span small,
+.settings-danger span,
+.settings-danger small { font-size: var(--ui-meta-size); }
+.settings-field input,
+.settings-field select,
+.settings-actions button,
+.settings-danger button { min-height: var(--ui-control-height); font-size: 13px; }
+
+.ai-insights-hero p,
+.ai-summary-grid article > span,
+.ai-summary-grid article > small,
+.ai-finding__body > small,
+.ai-detail__header p,
+.ai-detail__section-title small,
+.ai-recommendation p,
+.ai-provider__fields label,
+.ai-provider__fields small,
+.ai-provider__footer > p { font-size: var(--ui-meta-size); }
+.ai-finding__body > strong,
+.ai-detail__header h2,
+.ai-provider__title h2 { font-size: 15px; }
+.ai-filter-tabs button,
+.ai-ask__examples button,
+.ai-ask input,
+.ai-ask form button,
+.ai-provider__actions > button,
+.ai-provider__footer button { font-size: 13px; min-height: 34px; }
+
+.reverse-control-grid input,
+.reverse-control-grid select,
+.reverse-control-grid button { min-height: var(--ui-control-height); }
+.reverse-control-grid label { font-size: var(--ui-meta-size); }
+
+@media (max-width: 900px) {
+  .sidebar-footer .runtime-control { display: none; }
+  .sidebar-footer { margin-bottom: 8px; }
+  .overview-context { align-items: stretch; flex-direction: column; }
+  .overview-context > div { width: 100%; flex-wrap: wrap; }
+  .overview-context > div:first-child { align-items: flex-start; }
+  .inspection-steps { width: 100%; min-width: 0; flex-wrap: wrap; }
+  .inspection-step { white-space: nowrap; }
+  .dashboard-controls { width: 100%; }
+  .dashboard-controls label { flex: 1 1 140px; }
+  .dashboard-controls label select { width: 100%; }
+  .overview-journeys { grid-template-columns: 1fr; }
+  .metric-grid { min-width: 0; }
+  .graph-workspace { grid-template-columns: 1fr; }
+  .graph-workspace__side { max-height: none; }
+}
+
+@media (max-width: 560px) {
+  .workspace { padding: 16px 12px 28px; }
+  .global-inspector__bar { gap: 7px; }
+  .global-inspector__bar > input { flex-basis: calc(100% - 30px); }
+  .global-inspector button { padding: 0 10px; }
+  .card-header { padding-inline: 12px; }
+  .metric-grid { gap: 8px; }
+  .metric-card { padding: 11px 12px; min-height: 108px; }
+  .metric-card > strong { font-size: 18px; }
+  .global-timeline-summary { grid-template-columns: 1fr 1fr; }
+  .reverse-header { flex-direction: column; }
+  .reverse-header-actions { width: 100%; justify-content: space-between; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .observatory *,
+  .observatory *::before,
+  .observatory *::after { animation-duration: .01ms; animation-iteration-count: 1; transition-duration: .01ms; scroll-behavior: auto; }
 }

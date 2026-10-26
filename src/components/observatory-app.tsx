@@ -32,6 +32,7 @@ interface InspectOptions {
   cookiePath: string;
   cookieJson: string;
   includeFrames: boolean;
+  accessibilityAudit: boolean;
 }
 
 const defaultInspectOptions: InspectOptions = {
@@ -49,6 +50,7 @@ const defaultInspectOptions: InspectOptions = {
   cookiePath: "",
   cookieJson: "",
   includeFrames: false,
+  accessibilityAudit: true,
 };
 
 export function ObservatoryApp({ initialPlugin = "overview" }: { initialPlugin?: string }) {
@@ -273,6 +275,7 @@ function GlobalInspector() {
         <label><span>Cookie JSON path</span><input value={options.cookiePath} onChange={(event) => update("cookiePath", event.target.value)} placeholder="/path/to/cookies.json" /></label>
         <label><span>Import cookie JSON <small>optional file upload</small></span><input type="file" accept="application/json,.json" onChange={(event) => { const file = event.target.files?.[0]; if (!file) return; void file.text().then((value) => { update("cookieJson", value); update("cookiePath", ""); }); }} /></label>
         <label className="global-inspector__checkbox"><span>Include iframe documents</span><input type="checkbox" checked={options.includeFrames} onChange={(event) => update("includeFrames", event.target.checked)} /></label>
+        <label className="global-inspector__checkbox"><span>Accessibility audit <small>axe-core after settle</small></span><input type="checkbox" checked={options.accessibilityAudit} onChange={(event) => update("accessibilityAudit", event.target.checked)} /></label>
         <label className="global-inspector__field--wide"><span>Wait script (optional expression)</span><input value={options.waitScript} onChange={(event) => update("waitScript", event.target.value)} placeholder="window.__APP_READY__ === true" /></label>
         <label className="global-inspector__field--wide global-inspector__headers-field">
           <span className="global-inspector__field-title"><strong>Fixed request headers</strong><small>Applied to navigation and subresources</small></span>

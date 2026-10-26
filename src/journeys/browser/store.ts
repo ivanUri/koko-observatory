@@ -1,13 +1,11 @@
 import { create } from "zustand";
 import type { TelemetryEvent } from "@/src/core/types";
 import { isMeasuredEvent } from "@/src/core/metrics";
-import { resolveTransferSizes } from "@/src/core/network-metrics";
 import { lockDocumentRequest, matchesLockedDocument } from "@/src/core/document-transfer";
-import { browserJourneyNodes } from "./data";
+import { browserJourneyNodes, browserNodeIdForEvent } from "./data";
 import type { BrowserJourneyNode } from "./types";
 import { buildTrace, extendTrace, type BrowserTrace } from "./trace-model";
 
-const stageByKind: Partial<Record<TelemetryEvent["kind"], string>> = { dom: "dom", javascript: "javascript", scheduler: "event-loop", render: "paint", memory: "raster" };
 const traceEventIds = new Set<string>();
 
 function replaceTraceIds(events: TelemetryEvent[]) {
@@ -41,12 +39,6 @@ export const useBrowserJourneyStore = create<{
     }
     if (!fresh.length) return state;
     const nodes = state.nodes.map((item) => ({ ...item, metadata: { ...item.metadata } }));
-    const markBoundary = (id: string, source: string, metadata: Record<string, string | number> = {}) => {
-      const item = nodes.find((candidate) => candidate.id === id);
-      if (!item || item.status === "complete") return;
-      item.status = "complete";
-      item.metadata = { ...item.metadata, ...metadata, measurement: "Boundary derived from Koko telemetry", source };
-    };
     let phase = state.phase;
     let blockedReason = state.blockedReason;
     let revealed = state.revealed;
@@ -59,6 +51,11 @@ export const useBrowserJourneyStore = create<{
         // already declared the inspection complete.
         phase = "complete";
         revealed = nodes.length;
+        for (const pending of nodes) {
+          if (pending.status !== "pending") continue;
+          pending.status = "unavailable";
+          pending.metadata = { measurement: "No typed Core signal emitted for this inspection", source: "Inspection completed" };
+        }
         continue;
       }
       if (event.kind === "network") {
@@ -80,8 +77,7 @@ export const useBrowserJourneyStore = create<{
         phase = "running";
         revealed = Math.max(revealed, 1);
       }
-      const stage = typeof payload.browserStage === "string" ? payload.browserStage :
-        (event.kind === "network" && (payload.journeyStage === "received" || payload.journeyStage === "response") ? "response" : stageByKind[event.kind]);
+      const stage = browserNodeIdForEvent(event);
       const target = nodes.find((item) => item.id === stage);
       if (!target) continue;
       const measuredDuration = isMeasuredEvent(event) ? event.duration : 0;
@@ -97,34 +93,11 @@ export const useBrowserJourneyStore = create<{
       if (typeof payload.scriptKind === "string") target.metadata.scriptKind = payload.scriptKind;
       for (const key of ["contentType", "contentEncoding", "responseMemoryState"]) if (typeof payload[key] === "string") target.metadata[key] = payload[key] as string;
       for (const key of ["compressedSizeBytes", "uncompressedSizeBytes", "responseMemoryBytes", "responseBodyBytes"]) if (typeof payload[key] === "number") target.metadata[key] = payload[key] as number;
-      if (stage === "response" && event.status === "ok") {
-        const decodedBytes = resolveTransferSizes({
-          transferredBytes: typeof payload.responseBodyBytes === "number" ? payload.responseBodyBytes : undefined,
-          uncompressedBytes: typeof payload.uncompressedSizeBytes === "number" ? payload.uncompressedSizeBytes : undefined,
-          responseMemoryState: typeof payload.responseMemoryState === "string" ? payload.responseMemoryState : undefined,
-          responseBody: typeof payload.responseBody === "string" ? payload.responseBody : undefined,
-          bodyTruncated: payload.bodyTruncated === true,
-          contentEncoding: typeof payload.contentEncoding === "string" ? payload.contentEncoding : undefined,
-        }).decodedBytes;
-        markBoundary("decompression", "HTTP response metadata", {
-          contentEncoding: typeof payload.contentEncoding === "string" ? payload.contentEncoding : "identity / not provided",
-          compressedSizeBytes: typeof payload.compressedSizeBytes === "number" ? payload.compressedSizeBytes : 0,
-          ...(decodedBytes == null ? {} : { uncompressedSizeBytes: decodedBytes }),
-        });
-        markBoundary("cache", "Network cache decision", { cacheDecision: typeof payload.cacheDecision === "string" ? payload.cacheDecision : "not-observed" });
-      }
-      if (stage === "html-parser") markBoundary("preload", "HTML parser boundary", { measurement: "Scanner activity not timed separately" });
-      if (stage === "dom") {
-        const css = nodes.find((candidate) => candidate.id === "css-parser");
-        if (css?.status === "pending") { css.status = "unavailable"; css.metadata = { measurement: "No typed CSS parser timing emitted", source: "DOM completion boundary" }; }
-      }
-      if (stage === "layout") markBoundary("style", "Layout requires resolved styles", { measurement: "Style completion boundary; duration not isolated" });
-      if (stage === "frame" && target.status === "complete") {
-        for (const [id, source] of [["paint", "Frame completion"], ["layers", "Frame completion"], ["raster", "Frame completion"], ["composite", "Frame presentation"]] as const) markBoundary(id, source, { measurement: "Completion boundary; duration not isolated" });
+      if (stage === "document-complete" && target.status === "complete") {
         for (const pending of nodes) {
           if (pending.status !== "pending") continue;
           pending.status = "unavailable";
-          pending.metadata = { ...pending.metadata, measurement: "Core has no isolated typed signal for this stage", source: "Frame completed" };
+          pending.metadata = { ...pending.metadata, measurement: "No typed Core signal emitted for this stage", source: "Document completed" };
         }
         phase = "complete";
       }

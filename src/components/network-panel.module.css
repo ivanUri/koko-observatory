@@ -1,106 +1,35 @@
-/* Typography for Network only. Keep the request explorer readable without
- * changing the scale of the other telemetry pages. */
-.networkPage :global(.network-summary span) {
-  font-size: 11px !important;
-}
-
-.networkPage :global(.network-summary strong) {
-  font-size: 16px !important;
-}
-
-.networkPage :global(.network-summary small) {
-  font-size: 11px !important;
-}
-
-.networkPage :global(.network-type-bar button) {
-  padding: 8px 11px;
-  font-size: 11px;
-}
-
-.networkPage :global(.network-filters label > span) {
-  font-size: 10px;
-}
-
+/* Network remains dense, but no operational value is rendered below 11px. */
+.networkPage :global(.network-summary span) { font-size: 12px; }
+.networkPage :global(.network-summary strong) { font-size: 17px; }
+.networkPage :global(.network-summary small) { font-size: 12px; }
+.networkPage :global(.network-type-bar button) { padding: 8px 11px; font-size: 13px; }
+.networkPage :global(.network-filters label > span) { font-size: 12px; }
 .networkPage :global(.network-filters input),
 .networkPage :global(.network-filters select),
-.networkPage :global(.network-filters button) {
-  font-size: 11px;
-}
-
-.networkPage :global(.network-pending-notice strong) {
-  font-size: 11px;
-}
-
+.networkPage :global(.network-filters button) { font-size: 13px; }
+.networkPage :global(.network-pending-notice strong) { font-size: 12px; }
 .networkPage :global(.network-pending-notice span),
 .networkPage :global(.network-pending-fields span),
-.networkPage :global(.network-pending-fields code) {
-  font-size: 10px !important;
-  line-height: 1.5;
-}
-
-.networkPage :global(.network-request-list > header) {
-  font-size: 10px;
-}
-
-.networkPage :global(.network-request-list > div > button) {
-  font-size: 11px !important;
-  line-height: 1.4;
-}
-
-.networkPage :global(.network-request-list button > span:first-child b) {
-  font-size: 10px !important;
-}
-
-.networkPage :global(.network-request-list button > span:first-child small) {
-  font-size: 10px !important;
-}
-
-.networkPage :global(.network-request-list button > code) {
-  font-size: 10px !important;
-}
-
+.networkPage :global(.network-pending-fields code) { font-size: 12px; line-height: 1.5; }
+.networkPage :global(.network-request-list > header) { font-size: 12px; }
+.networkPage :global(.network-request-list > div > button) { font-size: 13px; line-height: 1.4; }
+.networkPage :global(.network-request-list button > span:first-child b),
+.networkPage :global(.network-request-list button > span:first-child small),
+.networkPage :global(.network-request-list button > code) { font-size: 12px; }
 .networkPage :global(.network-size b),
-.networkPage :global(.network-size small) {
-  font-size: 10px !important;
-}
-
-.networkPage :global(.network-empty strong) {
-  font-size: 12px !important;
-}
-
-.networkPage :global(.network-empty span) {
-  font-size: 11px !important;
-  line-height: 1.5;
-}
-
-.networkPage :global(.network-detail > header span) {
-  font-size: 10px !important;
-}
-
-.networkPage :global(.network-detail > header strong) {
-  font-size: 12px !important;
-}
-
-.networkPage :global(.network-detail > header small) {
-  font-size: 10px !important;
-}
-
-.networkPage :global(.network-detail > nav button) {
-  font-size: 10px !important;
-}
-
+.networkPage :global(.network-size small) { font-size: 12px; }
+.networkPage :global(.network-empty strong) { font-size: 13px; }
+.networkPage :global(.network-empty span) { font-size: 12px; line-height: 1.5; }
+.networkPage :global(.network-detail > header span) { font-size: 12px; }
+.networkPage :global(.network-detail > header strong) { font-size: 14px; }
+.networkPage :global(.network-detail > header small) { font-size: 12px; }
+.networkPage :global(.network-detail > nav button) { font-size: 12px; }
 .networkPage :global(.network-detail-grid small),
 .networkPage :global(.network-detail-grid strong),
 .networkPage :global(.network-timing__row > span),
 .networkPage :global(.network-timing__row strong),
-.networkPage :global(.network-timing footer) {
-  font-size: 10px !important;
-}
-
-.networkPage :global(.network-timing footer strong) {
-  font-size: 11px !important;
-}
-
+.networkPage :global(.network-timing footer) { font-size: 12px; }
+.networkPage :global(.network-timing footer strong) { font-size: 13px; }
 .networkPage :global(.network-headers section > header),
 .networkPage :global(.network-headers section > div),
 .networkPage :global(.network-headers section code),
@@ -108,15 +37,10 @@
 .networkPage :global(.network-headers section p),
 .networkPage :global(.network-headers aside),
 .networkPage :global(.network-headers aside strong),
-.networkPage :global(.network-headers aside p) {
-  font-size: 10px !important;
-}
-
+.networkPage :global(.network-headers aside p) { font-size: 12px; }
 .networkPage :global(.network-payload__meta span),
 .networkPage :global(.network-payload__type),
 .networkPage :global(.network-payload__body),
 .networkPage :global(.network-raw-events summary strong),
 .networkPage :global(.network-raw-events summary code),
-.networkPage :global(.network-raw-events summary small) {
-  font-size: 10px !important;
-}
+.networkPage :global(.network-raw-events summary small) { font-size: 12px; }

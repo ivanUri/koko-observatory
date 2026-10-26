@@ -5,10 +5,9 @@ import { Background, Controls, Handle, MarkerType, Position, ReactFlow, type Edg
 import { ChevronLeft, ChevronRight, CircleDot, Cpu, Pause, Play } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { browserJourneyEdges, browserJourneyNodes } from "./data";
+import { browserJourneyNodes, observedBrowserJourneyEdges } from "./data";
 import { useBrowserJourneyStore } from "./store";
 import type { BrowserJourneyNode } from "./types";
-import { browserCalls } from "./trace-model";
 import { layoutBrowserFlow, type BrowserFlowData } from "./layout";
 import type { TelemetryEvent } from "@/src/core/types";
 import { isMeasuredEvent } from "@/src/core/metrics";
@@ -18,7 +17,7 @@ import { useTelemetryStore } from "@/src/stores";
 function BrowserCard({ data }: NodeProps) {
   const item = data as unknown as BrowserFlowData;
   const expanded = item.expanded;
-  const statusLabel = item.status === "complete" ? (item.duration > 0 ? "Measured" : "Complete") : item.status === "active" ? "Active" : item.status === "error" ? "Error" : item.status === "unavailable" ? "Unavailable" : "Awaiting";
+  const statusLabel = item.status === "complete" ? (item.duration > 0 ? "Measured" : "Boundary") : item.status === "active" ? "Active" : item.status === "error" ? "Error" : item.status === "unavailable" ? "Unavailable" : "Awaiting";
   return <article className={`journey-node journey-node--${item.status}`}>
     {item.incomingHandles.map((id, index) => <Handle key={id} id={id} type="target" position={Position.Left} style={{ top: `${(index + 1) * 100 / (item.incomingHandles.length + 1)}%` }}/>) }
     <button className="journey-node__summary" onClick={(event) => { event.stopPropagation(); item.onToggle(item.id); }} aria-expanded={expanded}>
@@ -77,19 +76,20 @@ export function BrowserJourneyPanel() {
   }, [phase]);
   const toggleExpanded = useCallback((id: string) => setExpandedIds((current) => { const next = new Set(current); if (next.has(id)) next.delete(id); else next.add(id); return next; }), []);
   const visibleItems = useMemo(() => live.slice(0, revealed).map((item, index) => ({ ...item, status: playing ? (index < cursor ? "complete" as const : index === cursor ? "active" as const : "pending" as const) : item.status })), [live, revealed, cursor, playing]);
-  const styledEdges = useMemo<Edge[]>(() => browserJourneyEdges.map((edge) => { const sourceIndex = live.findIndex((item) => item.id === edge.source); const traversed = sourceIndex >= 0 && sourceIndex < cursor; return { ...edge, animated: playing && traversed, markerEnd: { type: MarkerType.ArrowClosed, color: traversed ? "#55d57d" : "#34404b" }, style: { stroke: traversed ? "#55d57d" : "#34404b" } }; }), [live, cursor, playing]);
+  const observedEdges = useMemo(() => observedBrowserJourneyEdges(trace.events), [trace.events]);
+  const styledEdges = useMemo<Edge[]>(() => observedEdges.map((edge) => { const sourceIndex = live.findIndex((item) => item.id === edge.source); const traversed = sourceIndex >= 0 && sourceIndex < cursor; return { ...edge, animated: playing && traversed, markerEnd: { type: MarkerType.ArrowClosed, color: traversed ? "#55d57d" : "#34404b" }, style: { stroke: traversed ? "#55d57d" : "#34404b" } }; }), [live, observedEdges, cursor, playing]);
   useEffect(() => {
     let cancelled = false;
     void layoutBrowserFlow(visibleItems, styledEdges, expandedIds, toggleExpanded).then((next) => { if (!cancelled) setFlow(next); });
     return () => { cancelled = true; };
   }, [visibleItems, styledEdges, expandedIds, toggleExpanded]);
-  const total = live.reduce((sum, item) => sum + (item.duration > 0 && item.status === "complete" ? item.duration : 0), 0);
-  const views = ["journey", "timeline", "dependencies", "frames", "resources", "event-loop", "javascript"];
-  const viewLabels: Record<string, string> = { journey: "Journey", timeline: "Browser timeline", dependencies: "Dependencies", frames: "Frames", resources: "Resources", "event-loop": "Event loop", javascript: "JavaScript" };
+  const views = ["journey", "timeline", "resources", "event-loop", "javascript"];
+  const viewLabels: Record<string, string> = { journey: "Journey", timeline: "Browser timeline", resources: "Resources", "event-loop": "Event loop", javascript: "JavaScript" };
+  const documentCompleteObserved = trace.events.some((event) => event.payload.browserStage === "frame");
   return <main className="internet-journey browser-journey">
-    <header className="journey-header"><div><span><Cpu size={14}/> Renderer pipeline</span><h1>Browser Journey</h1><p>From HTTP response bytes to the frame presented on screen.</p></div><Link href="/internet-journey">← Internet Journey</Link></header>
+    <header className="journey-header"><div><span><Cpu size={14}/> Core-observed browser stages</span><h1>Browser Journey</h1><p>Explicit Core signals from the HTTP response to document completion.</p></div><Link href="/internet-journey">← Internet Journey</Link></header>
     <nav className="browser-view-tabs">{views.map((item) => <Link key={item} className={view === item ? "active" : ""} href={item === "journey" ? "/browser-journey" : `/browser-journey/${item}`}>{viewLabels[item]}</Link>)}<Link href="/system-journey">System Journey →</Link></nav>
-    <div className="journey-toolbar"><div className="journey-stage-key">Network boundary → Parse → Execute → Render → Composite</div><div className="journey-playback">
+    <div className="journey-toolbar"><div className="journey-stage-key">Measured stages and lifecycle boundaries only</div><div className="journey-playback">
       <button onClick={() => seek(cursor - 1)}><ChevronLeft size={14}/></button><button onClick={() => play(!playing)}>{playing ? <Pause size={14}/> : <Play size={14}/>} {playing ? "Pause" : "Play"}</button><button onClick={() => seek(cursor + 1)}><ChevronRight size={14}/></button>
       {([.5, 1, 2] as const).map((value) => <button key={value} className={speed === value ? "active" : ""} onClick={() => setSpeed(value)}>×{value}</button>)}
     </div></div>
@@ -98,9 +98,8 @@ export function BrowserJourneyPanel() {
     {view === "journey" && (phase === "running" || phase === "complete") && <section className="journey-graph browser-journey__graph"><ReactFlow nodes={flow.nodes} edges={flow.edges} nodeTypes={nodeTypes} onNodeClick={(_, node) => { if (node.type === "browser") setSelectedId(node.id); }} fitView fitViewOptions={{ padding: .12 }} minZoom={.2} maxZoom={1.4} nodesDraggable={false} elevateEdgesOnSelect><Background color="#23303b" gap={20}/><Controls/></ReactFlow></section>}
     {migratedView && <section className="journey-empty"><Cpu size={22}/><strong>This view belongs to System Journey</strong><span>Process, thread and memory telemetry describe runtime and operating-system ownership outside the response-to-frame browser pipeline.</span><Link href={`/system-journey#${migratedView}`}>Open {view} telemetry →</Link></section>}
     {view === "journey" && selectedId && <NodeDetails item={live.find((item) => item.id === selectedId)} onClose={() => setSelectedId(null)}/>} 
-    {view === "timeline" && <TraceTimeline trace={trace}/>} {view === "dependencies" && <DependencyView trace={trace}/>} {view === "resources" && <ResourceView trace={trace}/>} {view === "frames" && <FrameView trace={trace}/>} {view === "event-loop" && <EventLoopView trace={trace}/>} {view === "javascript" && <CallGraphView trace={trace}/>}
-    {view === "journey" && (phase === "running" || phase === "complete") && <section className="journey-waterfall"><header><strong>Browser processing waterfall</strong><span>Total measured <b>{total ? `${total.toFixed(3)} ms` : "Awaiting Koko events"}</b></span></header><div>{live.filter((item) => item.duration > 0).map((item) => <span key={item.id}><small>{item.title}</small><i style={{ width: `${Math.max(2, item.duration / Math.max(total, 1) * 100)}%` }}/><b>{item.duration.toFixed(2)} ms</b></span>)}</div></section>}
-    {phase === "complete" && <footer className="journey-boundary"><strong>Document/frame completion boundary.</strong><span>This is a lifecycle boundary, not proof that a frame was presented. Every unavailable stage remains explicit until Koko Core emits supporting telemetry.</span><button>Open Rendering Explorer →</button></footer>}
+    {view === "timeline" && <TraceTimeline trace={trace}/>} {view === "resources" && <ResourceView trace={trace}/>} {view === "event-loop" && <EventLoopView trace={trace}/>} {view === "javascript" && <CallGraphView trace={trace}/>}
+    {phase === "complete" && documentCompleteObserved && <footer className="journey-boundary"><strong>Document completion boundary.</strong><span>Koko Core emitted the document lifecycle boundary. Frame presentation, paint, rasterization and compositing are not measured here.</span></footer>}
   </main>;
 }
 
@@ -183,7 +182,6 @@ type PositionedBrowserTimelineSpan = BrowserTimelineSpan & { left: number; width
 function isBrowserTimelineSpan(span: BrowserTimelineSpan) {
   const payload = span.event.payload;
   if (typeof payload.browserStage === "string") return true;
-  if (["dom", "javascript", "scheduler", "render"].includes(span.event.kind)) return true;
   return span.event.kind === "network" && ["response", "received"].includes(String(payload.journeyStage ?? ""));
 }
 
@@ -225,7 +223,7 @@ function EventLoopView({ trace }: { trace: Trace }) {
     javascript: "#42c997", scheduler: "#3b8bd6", dom: "#a37bd3", render: "#d4a957",
   };
 
-  if (!tasks.length) return <section className="trace-view"><header><strong>Event loop</strong><span>Task and microtask ordering</span></header><Empty>Awaiting scheduler and JavaScript queue events from Koko core.</Empty></section>;
+  if (!tasks.length) return <section className="trace-view"><header><strong>Event loop</strong><span>Core-observed scheduler tasks</span></header><Empty>Awaiting scheduler events from Koko core.</Empty></section>;
 
   return (
     <section className="trace-view el-view">
@@ -290,8 +288,6 @@ function EventLoopView({ trace }: { trace: Trace }) {
     </section>
   );
 }
-function DependencyView({ trace }: { trace: Trace }) { return <section className="trace-view"><header><strong>Stage dependencies</strong><span>{browserJourneyEdges.length} declared edges</span></header><table className="trace-table"><thead><tr><th>From</th><th>To</th><th>Reason</th><th>Status</th></tr></thead><tbody>{browserJourneyEdges.map((edge) => { const source = trace.spans.some((span) => span.stage === edge.source); const target = trace.spans.some((span) => span.stage === edge.target); return <tr key={edge.id}><td>{edge.source}</td><td>{edge.target}</td><td>{edge.label}</td><td>{source && target ? "observed" : "awaiting telemetry"}</td></tr>; })}</tbody></table></section>; }
-function FrameView({ trace }: { trace: Trace }) { const presented = trace.frames.filter((frame) => frame.presented); const boundaries = trace.frames.length - presented.length; return <section className="trace-view"><header><strong>Frame lifecycle</strong><span>{presented.length} presented · {boundaries} completion boundaries</span></header>{trace.frames.length ? <div className="event-queue">{trace.frames.map((frame) => <article key={frame.id}><b>{frame.presented ? "Frame presented" : "Frame completion boundary"}</b><span>{frame.id}</span><strong>{frame.duration > 0 ? `${frame.duration.toFixed(3)} ms` : "Boundary"}</strong></article>)}</div> : <Empty>Core has not emitted frame timing for this navigation yet.</Empty>}</section>; }
 
 function MiniLineChart({ values, color, label }: { values: number[]; color: string; label: string }) {
   const W = 320; const H = 52;
@@ -325,22 +321,8 @@ function MiniLineChart({ values, color, label }: { values: number[]; color: stri
   );
 }
 
-function JsdPending({ title, icon, reason }: { title: string; icon: string; reason: string }) {
-  return (
-    <div className="jsd-pending">
-      <span className="jsd-pending__icon">{icon}</span>
-      <div>
-        <strong>{title}</strong>
-        <span>{reason}</span>
-      </div>
-      <span className="jsd-pending__badge">Awaiting core telemetry</span>
-    </div>
-  );
-}
-
 function CallGraphView({ trace }: { trace: Trace }) {
   const [scriptExpanded, setScriptExpanded] = useState<Set<string>>(() => new Set());
-  const calls = browserCalls(trace.events);
 
   // All JS events (including render/browserStage=javascript from current data)
   const jsEvents = trace.events.filter((e) =>
@@ -387,7 +369,7 @@ function CallGraphView({ trace }: { trace: Trace }) {
 
   if (jsEvents.length === 0) return (
     <section className="trace-view">
-      <header><strong>JavaScript runtime</strong><span>V8 engine telemetry</span></header>
+      <header><strong>JavaScript runtime</strong><span>V8 script-level telemetry</span></header>
       <Empty>Awaiting JavaScript events from Koko core.</Empty>
     </section>
   );
@@ -396,16 +378,16 @@ function CallGraphView({ trace }: { trace: Trace }) {
     <section className="trace-view jsd-view">
       <header>
         <strong>JavaScript runtime</strong>
-        <span>{jsEvents.length} events · {scripts.length} scripts · {totalScriptDur.toFixed(1)} ms JS time{calls.length > 0 ? ` · ${calls.length} function calls` : ""}</span>
+        <span>{jsEvents.length} events · {scripts.length} scripts · {totalScriptDur.toFixed(1)} ms JS time</span>
       </header>
 
       {/* System context */}
       {(physMem > 0 || cpuCount > 0) && (
         <div className="jsd-sys">
-          {cpuCount > 0 && <span><small>CPUs</small><b>{cpuCount} logical</b></span>}
-          {physMem > 0 && <span><small>Physical RAM</small><b>{(physMem / 1024 / 1024 / 1024).toFixed(1)} GB</b></span>}
-          {totalCtx > 0 && <span><small>Context switches</small><b>{totalCtx}</b></span>}
-          {memValues.length > 0 && <span><small>Final resident</small><b>{((memValues[memValues.length - 1] ?? 0) / 1024 / 1024).toFixed(0)} MB</b></span>}
+          {cpuCount > 0 && <span><small>Core logical CPUs</small><b>{cpuCount}</b></span>}
+          {physMem > 0 && <span><small>Host physical RAM</small><b>{(physMem / 1024 / 1024 / 1024).toFixed(1)} GB</b></span>}
+          {totalCtx > 0 && <span><small>Core context switches</small><b>{totalCtx}</b></span>}
+          {memValues.length > 0 && <span><small>Core resident RAM</small><b>{((memValues[memValues.length - 1] ?? 0) / 1024 / 1024).toFixed(0)} MB</b></span>}
         </div>
       )}
 
@@ -461,41 +443,6 @@ function CallGraphView({ trace }: { trace: Trace }) {
         </div>
       </div>
 
-      {/* Function call tree — shown when V8 profiler data is available */}
-      {calls.length > 0 ? (
-        <div className="jsd-section">
-          <div className="jsd-section__header"><strong>Function call tree</strong><span>{calls.length} attributed calls</span></div>
-          <div className="cg-calltree">
-            {calls.map((call) => (
-              <div key={call.id} className="cg-call" style={{ paddingLeft: `${Math.min(call.depth, 8) * 16 + 8}px` }}>
-                <span className="cg-call__depth">L{call.depth}</span>
-                <span className="cg-call__name">{call.name}</span>
-                <span className="cg-call__kind">{call.kind}</span>
-                <span className="cg-call__dur">{call.duration.toFixed(3)} ms</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      ) : (
-        <JsdPending
-          title="Function-level call graph"
-          icon="⛓"
-          reason="Koko core emits script-level boundaries now. Function-to-function call edges will appear when V8 profiler events include functionName, callId and parentCallId."
-        />
-      )}
-
-      {/* Pending sections — will light up when core adds telemetry */}
-      <div className="jsd-section jsd-section--pending">
-        <div className="jsd-section__header"><strong>Pending runtime features</strong><span>Activate when Koko core emits supporting events</span></div>
-        <div className="jsd-pending-list">
-          <JsdPending title="Garbage collection (GC)" icon="♻" reason="V8 GC callback (v8::GCCallback) — emit gc-start / gc-end events with kind (scavenge, mark-sweep, incremental) and duration." />
-          <JsdPending title="Timers & task queue" icon="⏱" reason="setTimeout / setInterval / queueMicrotask instrumentation — emit timer-fire events with callerId, delay and kind (macro/micro/raf)." />
-          <JsdPending title="Promise & async tracking" icon="⚡" reason="V8 Promise hooks (PromiseHook) — emit promise-created / promise-resolved / promise-rejected with parent promise chain IDs." />
-          <JsdPending title="Web Workers" icon="👷" reason="Dedicated and shared worker lifecycle — emit worker-created / worker-message events with workerId, scriptUrl and origin thread." />
-          <JsdPending title="Heap snapshot" icon="🧠" reason="V8 heap profiler (v8::HeapProfiler) — emit heap-snapshot events with alloc/freed bytes, live objects count and GC root types." />
-          <JsdPending title="Wasm module execution" icon="⬡" reason="WebAssembly.compile / WebAssembly.instantiate hooks — emit wasm-compile / wasm-execute with module URL and tier (baseline/optimized)." />
-        </div>
-      </div>
     </section>
   );
 }

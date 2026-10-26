@@ -3,7 +3,7 @@
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Activity, AlertTriangle, CircleDot, Clock3, Cpu, Database, Gauge, GitBranch, Grid3x3, List, Network, Share2, Waypoints, Wifi, X, Zap } from "lucide-react";
+import { Accessibility, Activity, AlertTriangle, CircleDot, Clock3, Cpu, Database, Gauge, GitBranch, Grid3x3, List, Network, Share2, Waypoints, Wifi, X, Zap } from "lucide-react";
 import { RealtimeChart } from "@/src/components/realtime-chart";
 import styles from "@/src/components/overview-panel.module.css";
 import graphStyles from "@/src/components/graph-panel.module.css";
@@ -12,6 +12,7 @@ import { useGraphStore, useNetworkStore, useReplayStore, useSelectionStore, useT
 import type { TelemetryEvent } from "@/src/core/types";
 import { bucketEventRate, eventsPerSecond, metricCategory, percentile, isMeasuredEvent, utf8ByteLength } from "@/src/core/metrics";
 import { aggregateNetworkRequests, matchesNetworkType, networkStageOrder, type NetworkRequestSummary } from "@/src/core/network-metrics";
+import { downloadChromeTrace } from "@/src/core/trace";
 
 const ExecutionGraph = dynamic(
   () => import("@/src/components/execution-graph").then((module) => module.ExecutionGraph),
@@ -53,6 +54,9 @@ export function OverviewPanel() {
   const diskRead = numberPayload(latestSample?.payload, "diskReadBytes");
   const diskWrite = numberPayload(latestSample?.payload, "diskWriteBytes");
   const p95 = percentile(measured.map((event) => event.duration), .95);
+  const webVitals = useMemo(() => latestWebVitals(scoped), [scoped]);
+  const accessibility = useMemo(() => latestAccessibility(scoped), [scoped]);
+  const probeCount = scoped.filter((event) => event.payload.probe === true).length;
   const statusTotal = Math.max(scoped.length, 1);
   const healthy = Math.max(0, scoped.length - errors - warnings);
   const hasTelemetry = scoped.length > 0;
@@ -68,11 +72,16 @@ export function OverviewPanel() {
     return { journey, events: source.length, errors: source.filter((event) => event.status === "error").length, warnings: source.filter((event) => event.status === "warning").length, p95: p95Val, p50: p50Val };
   });
 
-  // Pipeline coverage: which browser stages have seen at least one event
-  const PIPELINE_STAGES = ["response", "decompression", "cache", "html-parser", "preload", "dom", "css-parser", "javascript", "event-loop", "mutations", "style", "layout", "paint", "layers", "raster", "composite", "frame"] as const;
+  // Pipeline coverage only counts typed Core browser signals. Probe events
+  // and inferred stages are intentionally excluded from this score.
+  const PIPELINE_STAGES = ["response", "html-parser", "dom", "javascript", "event-loop", "layout", "document-complete"] as const;
   const observedStages = new Set(scoped.flatMap((e) => {
-    const bs = String(e.payload.browserStage ?? ""); const ss = String(e.payload.systemStage ?? "");
-    return [bs, ss, e.kind, e.name].filter(Boolean);
+    if (e.payload.probe === true) return [];
+    const bs = typeof e.payload.browserStage === "string" ? e.payload.browserStage : "";
+    if (bs === "frame") return ["document-complete"];
+    if (bs) return [bs];
+    if (e.kind === "network" && ["response", "received"].includes(String(e.payload.journeyStage ?? ""))) return ["response"];
+    return [];
   }));
   const pipelineCoverage = PIPELINE_STAGES.map((stage) => ({ stage, observed: observedStages.has(stage) }));
   const coveredCount = pipelineCoverage.filter((s) => s.observed).length;
@@ -175,6 +184,27 @@ export function OverviewPanel() {
         <Metric label="Disk read" value={diskRead == null ? "—" : formatBytes(diskRead)} delta={diskRead == null ? "Signal unavailable" : "cumulative bytes read"} icon={Database} />
         <Metric label="Disk write" value={diskWrite == null ? "—" : formatBytes(diskWrite)} delta={diskWrite == null ? "Signal unavailable" : "cumulative bytes written"} icon={Database} />
       </div>
+
+      <section className="panel-card monitor-panel">
+        <CardHeader title="Page experience signals" subtitle="Web Vitals, rrweb and OpenTelemetry collected by the injected probe" icon={Zap} />
+        <div className="health-stack">
+          <HealthRow label="LCP" value={formatVital(webVitals.LCP)} width={vitalWidth(webVitals.LCP, 4_000)} tone="primary" />
+          <HealthRow label="INP" value={formatVital(webVitals.INP)} width={vitalWidth(webVitals.INP, 500)} tone="blue" />
+          <HealthRow label="CLS" value={formatVital(webVitals.CLS)} width={vitalWidth(webVitals.CLS, 0.5)} tone="mint" />
+          <HealthRow label="FCP / TTFB" value={`${formatVital(webVitals.FCP)} / ${formatVital(webVitals.TTFB)}`} width={vitalWidth(webVitals.FCP ?? webVitals.TTFB, 2_000)} tone="amber" />
+        </div>
+        <div className="card-footer-note">{probeCount ? `${probeCount.toLocaleString()} page probe events` : "Probe data appears after the next inspection."}<button type="button" onClick={() => downloadChromeTrace(scoped, "koko-observatory-trace.json")} disabled={!scoped.length}>Download Perfetto trace</button></div>
+      </section>
+
+      <section className="panel-card monitor-panel">
+        <CardHeader title="Accessibility audit" subtitle="axe-core rules against the settled, rendered document" icon={Accessibility} />
+        <div className="health-stack">
+          <HealthRow label="Violations" value={accessibility ? String(accessibility.violations) : "—"} width={accessibility ? Math.min(100, accessibility.violations * 12) : "0%"} tone="amber" />
+          <HealthRow label="Needs review" value={accessibility ? String(accessibility.incomplete) : "—"} width={accessibility ? Math.min(100, accessibility.incomplete * 12) : "0%"} tone="blue" />
+          <HealthRow label="Passed rules" value={accessibility ? String(accessibility.passes) : "—"} width={accessibility ? Math.min(100, accessibility.passes / Math.max(accessibility.passes + accessibility.violations, 1) * 100) : "0%"} tone="mint" />
+        </div>
+        <div className="card-footer-note">{accessibility ? `Measured by axe-core${accessibility.duration ? ` in ${Math.round(accessibility.duration)} ms` : ""}. “Needs review” is not treated as pass.` : "Run an inspection with Accessibility audit enabled."}</div>
+      </section>
 
       {/* Journey summary — enriched */}
       <div className="overview-journeys overview-journeys--rich">
@@ -563,7 +593,7 @@ const JOURNEY_COLORS: Record<string, string> = {
 function nodeJourney(event?: TelemetryEvent): string {
   if (!event) return "runtime";
   if (typeof event.payload.systemStage === "string" || event.kind === "memory") return "system";
-  if (typeof event.payload.browserStage === "string" || ["dom", "javascript", "render"].includes(event.kind)) return "browser";
+  if (isCoreBrowserEvent(event)) return "browser";
   if (typeof event.payload.journeyStage === "string" || ["network", "navigation"].includes(event.kind)) return "internet";
   return "runtime";
 }
@@ -1139,14 +1169,20 @@ function LivePill() { const status = useTelemetryStore((state) => state.status);
 function formatNumber(value: number) { return new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 }).format(value); }
 function formatDuration(value: number) { return value > 0 ? `${value.toFixed(1)} ms` : "—"; }
 function formatTimelineOffset(value: number) { if (value >= 60_000) return `${(value / 60_000).toFixed(2)} min`; if (value >= 1000) return `${(value / 1000).toFixed(2)} s`; if (value >= 1) return `${value.toFixed(1)} ms`; return `${(value * 1000).toFixed(0)} µs`; }
+function isCoreBrowserEvent(event: TelemetryEvent) {
+  if (event.payload.probe === true) return false;
+  if (typeof event.payload.browserStage === "string") return true;
+  if (event.kind === "javascript") return true;
+  return event.kind === "network" && ["response", "received"].includes(String(event.payload.journeyStage ?? ""));
+}
 function classifyJourney(event: ReturnType<typeof useTelemetryStore.getState>["events"][number]) {
-  if (typeof event.payload.browserStage === "string" || ["dom", "javascript", "render"].includes(event.kind)) return "browser";
+  if (isCoreBrowserEvent(event)) return "browser";
   if (typeof event.payload.journeyStage === "string" || event.kind === "network" || event.kind === "navigation") return "internet";
   if (typeof event.payload.systemStage === "string" || event.kind === "memory") return "system";
   return "runtime";
 }
 function belongsToJourney(event: TelemetryEvent, journey: "internet" | "browser" | "system") {
-  if (journey === "browser") return typeof event.payload.browserStage === "string" || ["dom", "javascript", "render"].includes(event.kind);
+  if (journey === "browser") return isCoreBrowserEvent(event);
   if (journey === "internet") return typeof event.payload.journeyStage === "string" || event.kind === "network" || event.kind === "navigation";
   return typeof event.payload.systemStage === "string" || event.kind === "memory";
 }
@@ -1156,6 +1192,43 @@ function barWidth(value: number, events: ReturnType<typeof useTelemetryStore.get
 function barWidthFromValue(value: string) { const number = Number.parseFloat(value); return Number.isFinite(number) ? `${Math.min(100, number / 200 * 100)}%` : "0%"; }
 function stringPayload(payload: Record<string, unknown>, key: string) { const value = payload[key]; return typeof value === "string" && value.length ? value : undefined; }
 function numberPayload(payload: Record<string, unknown> | undefined, key: string) { const value = payload?.[key]; return typeof value === "number" && Number.isFinite(value) ? value : undefined; }
+
+function probePayload(event: TelemetryEvent): Record<string, unknown> | undefined {
+  if (typeof event.payload.probeJson !== "string") return undefined;
+  try { const value = JSON.parse(event.payload.probeJson); return value && typeof value === "object" ? value as Record<string, unknown> : undefined; } catch { return undefined; }
+}
+
+function latestWebVitals(events: TelemetryEvent[]) {
+  const values: Partial<Record<"LCP" | "INP" | "CLS" | "FCP" | "TTFB", number>> = {};
+  for (const event of events) {
+    if (event.name !== "web-vital") continue;
+    const probe = probePayload(event);
+    const name = probe?.name;
+    const value = probe?.value;
+    if ((name === "LCP" || name === "INP" || name === "CLS" || name === "FCP" || name === "TTFB") && typeof value === "number") values[name] = value;
+  }
+  return values;
+}
+
+function latestAccessibility(events: TelemetryEvent[]) {
+  const event = [...events].reverse().find((candidate) => candidate.name === "accessibility-audit");
+  const probe = event ? probePayload(event) : undefined;
+  const counts = probe?.counts;
+  if (!counts || typeof counts !== "object") return undefined;
+  const number = (key: string) => typeof counts[key] === "number" ? counts[key] as number : undefined;
+  const violations = number("violations");
+  const incomplete = number("incomplete");
+  const passes = number("passes");
+  if (violations == null || incomplete == null || passes == null) return undefined;
+  return { violations, incomplete, passes, duration: numberPayload(probe, "duration") };
+}
+
+function formatVital(value: number | undefined) {
+  if (value == null) return "—";
+  return value < 1 ? value.toFixed(3) : `${Math.round(value)} ms`;
+}
+
+function vitalWidth(value: number | undefined, budget: number) { return value == null ? "0%" : `${Math.max(4, Math.min(100, value / budget * 100))}%`; }
 function graphDepth(nodeIds: string[], edges: Array<{ source: string; target: string }>) {
   const children = new Map<string, string[]>();
   const targets = new Set<string>();

@@ -27,12 +27,14 @@ const ownership: Record<string, [string, string]> = {
 
 function spanFromEvent(event: TelemetryEvent): BrowserSpan {
   const browserStage = typeof event.payload.browserStage === "string" ? event.payload.browserStage : undefined;
-  const ownerKind = browserStage === "javascript" ? "javascript" : browserStage === "event-loop" || browserStage === "scheduler" ? "scheduler" : browserStage === "dom" || browserStage === "mutations" ? "dom" : browserStage ? "render" : event.kind;
-  const [process, thread] = ownership[ownerKind] ?? ["Browser", "Unknown"];
+  const ownerKind = browserStage === "javascript" ? "javascript" : browserStage === "event-loop" || browserStage === "scheduler" ? "scheduler" : browserStage === "dom" || browserStage === "mutations" ? "dom" : browserStage ? "render" : ["dom", "javascript", "scheduler", "network"].includes(event.kind) ? event.kind : undefined;
   const payload = event.payload as Record<string, unknown>;
+  const [fallbackProcess, fallbackThread] = ownership[ownerKind] ?? ["Browser", "Unknown"];
+  const process = typeof payload.processName === "string" ? payload.processName : typeof payload.process === "string" ? payload.process : fallbackProcess;
+  const thread = typeof payload.threadName === "string" ? payload.threadName : typeof payload.thread === "string" ? payload.thread : fallbackThread;
   const rawState = String(payload.measurementState ?? payload.measurement ?? "").toLowerCase();
   const state = event.status === "error" ? "error" : isMeasuredEvent(event) ? "measured" : ["estimated", "derived", "reused", "cached", "below-resolution", "unavailable", "not-applicable"].includes(rawState) ? rawState as MeasurementState : "unavailable";
-  return { id: event.id, stage: browserStage ?? event.kind, start: event.timestamp, duration: isMeasuredEvent(event) ? event.duration : 0, process, thread, state, event };
+  return { id: event.id, stage: browserStage === "frame" ? "document-complete" : browserStage ?? event.kind, start: event.timestamp, duration: isMeasuredEvent(event) ? event.duration : 0, process, thread, state, event };
 }
 
 function resourceKey(event: TelemetryEvent) {

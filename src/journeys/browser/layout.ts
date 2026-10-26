@@ -9,11 +9,11 @@ function getElk() {
 }
 
 export const browserStages = [
-  { id: "network", label: "01 · NETWORK", nodes: ["response", "decompression", "cache"] },
-  { id: "parse", label: "02 · PARSE", nodes: ["html-parser", "preload", "dom", "css-parser"] },
-  { id: "execute", label: "03 · EXECUTE", nodes: ["javascript", "event-loop", "mutations"] },
-  { id: "render", label: "04 · RENDER", nodes: ["style", "layout", "paint", "layers", "raster"] },
-  { id: "composite", label: "05 · COMPOSITE", nodes: ["composite", "frame"] },
+  { id: "network", label: "01 · RESPONSE", nodes: ["response"] },
+  { id: "parse", label: "02 · PARSE", nodes: ["html-parser", "dom"] },
+  { id: "execute", label: "03 · EXECUTE", nodes: ["javascript", "event-loop"] },
+  { id: "render", label: "04 · LAYOUT", nodes: ["layout"] },
+  { id: "complete", label: "05 · DOCUMENT", nodes: ["document-complete"] },
 ] as const;
 
 const stageByNode = new Map(browserStages.flatMap((stage) => stage.nodes.map((id) => [id, stage.id])));

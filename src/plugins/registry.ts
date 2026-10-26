@@ -1,4 +1,4 @@
-import { Activity, Braces, Cpu, Database, FileDown, GitBranch, Globe2, MonitorCog, Network, Play, Sparkles, TerminalSquare, TimerReset, WandSparkles } from "lucide-react";
+import { Activity, Braces, Cpu, Database, FileDown, GitBranch, Globe2, MonitorCog, Network, Play, Sparkles, TerminalSquare, TimerReset, WandSparkles, MonitorPlay, Waypoints } from "lucide-react";
 import type { ObservatoryPlugin } from "@/src/plugins/types";
 import { GraphPanel, NetworkPanel, OverviewPanel, TimelinePanel } from "@/src/components/panels";
 import { ExecutionPanel } from "@/src/components/execution-panel";
@@ -11,17 +11,21 @@ import { ExportPanel } from "@/src/components/export-panel";
 import { AIInsightsPanel } from "@/src/components/ai-insights-panel";
 import { SettingsPanel } from "@/src/components/settings-panel";
 import { AutomationPanel } from "@/src/components/automation-panel";
+import { PageReplayPanel } from "@/src/components/page-replay-panel";
+import { ReverseInspectorPanel } from "@/src/components/reverse-inspector-panel";
 
 export const plugins: ObservatoryPlugin[] = [
   { id: "overview", route: "/", label: "Overview", description: "Runtime health and metrics", icon: Activity, component: OverviewPanel },
   { id: "internet-journey", route: "/internet-journey", label: "Internet Journey", description: "URL to HTTP response", icon: Globe2, component: InternetJourneyPanel, badge: "New" },
-  { id: "browser-journey", route: "/browser-journey", label: "Browser Journey", description: "Response to presented frame", icon: Cpu, component: BrowserJourneyPanel, badge: "New" },
+  { id: "browser-journey", route: "/browser-journey", label: "Browser Journey", description: "Core-observed browser stages", icon: Cpu, component: BrowserJourneyPanel, badge: "New" },
   { id: "system-journey", route: "/system-journey", label: "System Journey", description: "OS and hardware execution", icon: MonitorCog, component: SystemJourneyPanel, badge: "New" },
   { id: "timeline", route: "/timeline", label: "Global Timeline", description: "All normalized telemetry events", icon: TimerReset, component: TimelinePanel },
   { id: "graph", route: "/graph", label: "Execution graph", description: "Causal graph explorer", icon: GitBranch, component: GraphPanel, badge: "120" },
   { id: "network", route: "/network", label: "Network", description: "Requests and responses", icon: Network, component: NetworkPanel },
   { id: "replay", route: "/replay", label: "Execution", description: "Controlled execution artifacts", icon: Play, component: ExecutionPanel },
+  { id: "page-replay", route: "/page-replay", label: "Page Replay", description: "rrweb DOM session playback", icon: MonitorPlay, component: PageReplayPanel, badge: "New" },
   { id: "automation", route: "/automation", label: "Automation", description: "Build live browser workflows", icon: WandSparkles, component: AutomationPanel, badge: "New" },
+  { id: "reverse", route: "/reverse", label: "Reverse Inspector", description: "Evidence-backed web behavior tracing", icon: Waypoints, component: ReverseInspectorPanel, badge: "New" },
   { id: "inspector", route: "/inspector", label: "Event inspector", description: "Structured payload editor", icon: Braces, component: InspectorPanel },
   { id: "console", route: "/console", label: "Console", description: "Runtime diagnostics", icon: TerminalSquare, component: ConsolePanel },
   { id: "application", route: "/application", label: "Application", description: "Cookies and origin storage", icon: Database, component: ApplicationPanel, sidebar: false },

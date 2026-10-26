@@ -1,3 +1,4 @@
+import type { TelemetryEvent } from "@/src/core/types";
 import type { BrowserJourneyNode } from "./types";
 
 const node = (id: string, type: BrowserJourneyNode["type"], title: string, description: string, process: string, thread: string): BrowserJourneyNode => ({
@@ -6,31 +7,36 @@ const node = (id: string, type: BrowserJourneyNode["type"], title: string, descr
 
 export const browserJourneyNodes: BrowserJourneyNode[] = [
   node("response", "boundary", "Response received", "Network bytes cross into the browser processing pipeline.", "Browser", "Network"),
-  node("decompression", "decode", "Content decoding", "gzip, Brotli, deflate or identity bytes are decoded.", "Browser", "Network"),
-  node("cache", "cache", "Browser cache", "Classify memory, disk, service worker, revalidation or cache miss.", "Browser", "Network"),
   node("html-parser", "parser", "HTML parser", "Tokenizer and tree builder progressively construct the document.", "Renderer", "Main"),
-  node("preload", "resource", "Preload scanner", "Discover CSS, scripts, images, fonts and hints in parallel.", "Renderer", "Preload"),
   node("dom", "dom", "DOM construction", "Tokens become nodes with parser-blocking boundaries preserved.", "Renderer", "Main"),
-  node("css-parser", "parser", "CSS parser / CSSOM", "Stylesheets become rules, selectors and the CSS object model.", "Renderer", "Main"),
   node("javascript", "javascript", "JavaScript engine", "Compile and execute scripts at script-level granularity.", "Renderer", "Main"),
   node("event-loop", "scheduler", "Event loop", "Tasks, microtasks and animation callbacks run in defined order.", "Renderer", "Main"),
-  node("mutations", "dom", "DOM updates", "Track inserted, removed and changed nodes and attributes.", "Renderer", "Main"),
-  node("style", "render", "Style calculation", "Resolve cascade, inheritance and computed styles.", "Renderer", "Main"),
   node("layout", "render", "Layout", "Calculate box geometry and element coordinates.", "Renderer", "Main"),
-  node("paint", "render", "Paint", "Generate display items and paint records.", "Renderer", "Main"),
-  node("layers", "render", "Layerization", "Promote eligible content into composited layers.", "Renderer", "Compositor"),
-  node("raster", "render", "Rasterization", "Raster threads convert tiles into bitmaps.", "Renderer", "Raster"),
-  node("composite", "gpu", "GPU compositor", "Assemble layers and submit the frame.", "GPU", "Compositor"),
-  node("frame", "boundary", "Frame presented", "The completed frame is ready on screen.", "GPU", "Compositor"),
+  node("document-complete", "boundary", "Document complete", "Koko Core emitted the document completion lifecycle boundary. This does not measure frame presentation.", "Renderer", "Main"),
 ];
 
-const flow: Array<[string, string, string]> = [
-  ["response", "decompression", "decode"], ["decompression", "cache", "classify"], ["cache", "html-parser", "HTML bytes"],
-  ["html-parser", "preload", "parallel discovery"], ["html-parser", "dom", "tree building"],
-  ["preload", "css-parser", "stylesheets"], ["preload", "javascript", "scripts"],
-  ["javascript", "event-loop", "scheduled work"], ["event-loop", "mutations", "callbacks"], ["dom", "mutations", "updates"],
-  ["dom", "style", "elements"], ["css-parser", "style", "CSSOM"], ["mutations", "style", "invalidation"],
-  ["style", "layout", "computed styles"], ["layout", "paint", "geometry"], ["paint", "layers", "display list"],
-  ["layers", "raster", "tiles"], ["raster", "composite", "bitmaps"], ["composite", "frame", "swap/present"],
-];
-export const browserJourneyEdges = flow.map(([source, target, reason], index) => ({ id: `browser-${index}`, source, target, label: reason }));
+const browserNodeIds = new Set(browserJourneyNodes.map((item) => item.id));
+
+/** Map only explicit Core browser signals to visible journey nodes. */
+export function browserNodeIdForEvent(event: TelemetryEvent): string | undefined {
+  const browserStage = typeof event.payload.browserStage === "string" ? event.payload.browserStage : undefined;
+  if (browserStage === "frame") return "document-complete";
+  if (browserStage && browserNodeIds.has(browserStage)) return browserStage;
+  if (event.kind === "network" && ["response", "received"].includes(String(event.payload.journeyStage ?? ""))) return "response";
+  return undefined;
+}
+
+/** Build edges from the first observed Core stage sequence, never from probe events. */
+export function observedBrowserJourneyEdges(events: TelemetryEvent[]) {
+  const ordered = [...events]
+    .sort((a, b) => a.timestamp - b.timestamp || a.sequence - b.sequence)
+    .map(browserNodeIdForEvent)
+    .filter((id): id is string => Boolean(id));
+  const firstSeen = [...new Set(ordered)];
+  return firstSeen.slice(1).map((target, index) => ({
+    id: `observed-browser-${index}`,
+    source: firstSeen[index],
+    target,
+    label: "Observed Core order",
+  }));
+}
