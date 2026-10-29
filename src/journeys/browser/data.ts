@@ -21,6 +21,7 @@ const browserNodeIds = new Set(browserJourneyNodes.map((item) => item.id));
 export function browserNodeIdForEvent(event: TelemetryEvent): string | undefined {
   const browserStage = typeof event.payload.browserStage === "string" ? event.payload.browserStage : undefined;
   if (browserStage === "frame") return "document-complete";
+  if (browserStage === "animation-frame") return "event-loop";
   if (browserStage && browserNodeIds.has(browserStage)) return browserStage;
   if (event.kind === "network" && ["response", "received"].includes(String(event.payload.journeyStage ?? ""))) return "response";
   return undefined;

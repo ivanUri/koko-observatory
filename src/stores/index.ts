@@ -182,11 +182,13 @@ export const useUIStore = create<{
   inspectorUrl: string;
   inspecting: boolean;
   inspectionStartedAt?: number;
+  activeInspectionId?: string;
   setActivePlugin: (id: string) => void;
   toggleSidebar: () => void;
   setCommandOpen: (open: boolean) => void;
   setInspectorUrl: (url: string) => void;
   setInspecting: (inspecting: boolean) => void;
+  setActiveInspectionId: (inspectionId?: string) => void;
   beginInspection: () => void;
 }>((set) => ({
   activePlugin: "overview",
@@ -195,12 +197,14 @@ export const useUIStore = create<{
   inspectorUrl: "https://example.com",
   inspecting: false,
   inspectionStartedAt: undefined,
+  activeInspectionId: undefined,
   setActivePlugin: (activePlugin) => set({ activePlugin }),
   toggleSidebar: () => set((state) => ({ sidebarCollapsed: !state.sidebarCollapsed })),
   setCommandOpen: (commandOpen) => set({ commandOpen }),
   setInspectorUrl: (inspectorUrl) => set({ inspectorUrl }),
   setInspecting: (inspecting) => set({ inspecting }),
-  beginInspection: () => set({ inspectionStartedAt: Date.now() }),
+  setActiveInspectionId: (activeInspectionId) => set({ activeInspectionId }),
+  beginInspection: () => set({ inspectionStartedAt: Date.now(), activeInspectionId: undefined }),
 }));
 
 export const useSettingsStore = create<ObservatorySettings & {

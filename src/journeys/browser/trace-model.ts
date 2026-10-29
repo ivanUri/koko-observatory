@@ -27,7 +27,7 @@ const ownership: Record<string, [string, string]> = {
 
 function spanFromEvent(event: TelemetryEvent): BrowserSpan {
   const browserStage = typeof event.payload.browserStage === "string" ? event.payload.browserStage : undefined;
-  const ownerKind = browserStage === "javascript" ? "javascript" : browserStage === "event-loop" || browserStage === "scheduler" ? "scheduler" : browserStage === "dom" || browserStage === "mutations" ? "dom" : browserStage ? "render" : ["dom", "javascript", "scheduler", "network"].includes(event.kind) ? event.kind : undefined;
+  const ownerKind = browserStage === "javascript" ? "javascript" : browserStage === "event-loop" || browserStage === "scheduler" || browserStage === "animation-frame" ? "scheduler" : browserStage === "dom" || browserStage === "mutations" ? "dom" : browserStage ? "render" : ["dom", "javascript", "scheduler", "network"].includes(event.kind) ? event.kind : undefined;
   const payload = event.payload as Record<string, unknown>;
   const [fallbackProcess, fallbackThread] = ownership[ownerKind] ?? ["Browser", "Unknown"];
   const process = typeof payload.processName === "string" ? payload.processName : typeof payload.process === "string" ? payload.process : fallbackProcess;
@@ -82,7 +82,7 @@ function framesFrom(events: TelemetryEvent[], presentedIds: Set<string>) {
   for (const event of events) {
     if (event.kind !== "render") continue;
     const stage = String(event.payload.browserStage ?? event.name);
-    if (!["frame", "present", "composite"].includes(stage)) continue;
+    if (!["present", "composite"].includes(stage)) continue;
     const presented = stage === "present" || event.payload.presentedFrameId != null;
     const presentationId = presented ? String(event.payload.presentedFrameId ?? event.id) : undefined;
     if (presentationId && presentedIds.has(presentationId)) continue;

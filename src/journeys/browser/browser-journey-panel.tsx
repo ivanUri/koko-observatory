@@ -93,7 +93,7 @@ export function BrowserJourneyPanel() {
   }, [visibleItems, styledEdges, expandedIds, toggleExpanded]);
   const views = ["journey", "timeline", "resources", "event-loop", "javascript"];
   const viewLabels: Record<string, string> = { journey: "Journey", timeline: "Browser timeline", resources: "Resources", "event-loop": "Event loop", javascript: "JavaScript" };
-  const documentCompleteObserved = trace.events.some((event) => event.payload.browserStage === "frame");
+  const documentCompleteObserved = trace.events.some((event) => event.payload.browserStage === "document-complete" || event.payload.browserStage === "frame");
   return <main className="internet-journey browser-journey">
     <header className="journey-header"><div><span><Cpu size={14}/> Core-observed browser stages</span><h1>Browser Journey</h1><p>Explicit Core signals from the HTTP response to document completion.</p></div><Link href="/internet-journey">← Internet Journey</Link></header>
     <nav className="browser-view-tabs">{views.map((item) => <Link key={item} className={view === item ? "active" : ""} href={item === "journey" ? "/browser-journey" : `/browser-journey/${item}`}>{viewLabels[item]}</Link>)}<Link href="/system-journey">System Journey →</Link></nav>

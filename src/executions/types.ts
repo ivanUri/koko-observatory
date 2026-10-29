@@ -3,7 +3,7 @@ import type { TelemetryEvent } from "@/src/core/types";
 export const executionSchemaVersion = 1;
 
 export type ExecutionFidelity = "playback-only" | "action-rerun" | "reconstructed" | "exact-live";
-export type ExecutionStatus = "recording" | "completed" | "failed" | "paused" | "unknown";
+export type ExecutionStatus = "recording" | "completed" | "failed" | "cancelled" | "paused" | "unknown";
 export type CheckpointKind = "bookmark" | "reconstructible" | "live";
 
 /** A replay plan is deliberately serialisable: the bridge writes it to a
@@ -145,5 +145,5 @@ function isExecutionCapability(value: unknown): value is ExecutionCapability {
 }
 
 function isExecutionStatus(value: string): value is ExecutionStatus {
-  return ["recording", "completed", "failed", "paused", "unknown"].includes(value);
+  return ["recording", "completed", "failed", "cancelled", "paused", "unknown"].includes(value);
 }

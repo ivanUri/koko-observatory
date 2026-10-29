@@ -97,9 +97,14 @@ server.on("connection", (socket) => {
         console.warn(`Koko inspect rejected invalid URL: ${command.url}`);
         return;
       }
+      // A new URL is a browser-style navigation: stop the previous Core
+      // process immediately, then let the existing queue start the replacement
+      // after the old process has closed and its final telemetry has drained.
+      const previousCancellation = cancelActiveInspection("replaced by a new inspection");
       // Each SDK inspection launches a browser process. Serialize commands so
       // separate processes never append to the same JSONL file concurrently.
       inspections = inspections.then(async () => {
+        await previousCancellation;
         await drain();
         const options = withKnownSiteReadinessWait(requestedUrl, normalizeRunOptions(command.options));
         let attempt = 0;
@@ -112,7 +117,8 @@ server.on("connection", (socket) => {
             // Run the Core fetch path instead of SDK Page.goto. The CLI path
             // owns the final Application storage snapshot, while JSONL remains
             // streamed live through drain() as the page loads.
-            const dump = await runCoreInspection(command.url, undefined, activeInspection.options);
+            const dump = await runCoreInspection(command.url, undefined, activeInspection.options, activeInspection);
+            if (activeInspection.cancelRequested) throw new Error("Inspection cancelled after Core completed");
             await drain();
             emitSiteExport(dump.markdown, dump.html);
             emitInspectionState("completed");
@@ -122,6 +128,12 @@ server.on("connection", (socket) => {
           } catch (error) {
             await drain();
             const reason = typeof error?.message === "string" ? error.message : "Unknown navigation error";
+            if (activeInspection.cancelRequested) {
+              emitInspectionState("cancelled", undefined, activeInspection.cancelReason ?? "Inspection replaced by a newer URL");
+              executions.set(activeInspection.id, activeInspection);
+              activeInspection = null;
+              break;
+            }
             const retryableCrash = attempt < 2 && /SIGABRT|SIGSEGV|SIGBUS/i.test(reason);
             if (retryableCrash) {
               const failedAttempt = activeInspection;
@@ -589,6 +601,35 @@ async function beginTelemetry(execution) {
   telemetrySource = { path: execution.telemetryFile, offset: 0, pending: "" };
 }
 
+function cancelActiveInspection(reason) {
+  const inspection = activeInspection;
+  if (!inspection) return Promise.resolve();
+  inspection.cancelRequested = true;
+  inspection.cancelReason = reason;
+  if (inspection.cancelPromise) return inspection.cancelPromise;
+  const child = inspection.child;
+  if (!child || child.exitCode !== null) return Promise.resolve();
+  inspection.cancelPromise = new Promise((resolveCancellation) => {
+    let settled = false;
+    const settle = () => {
+      if (settled) return;
+      settled = true;
+      resolveCancellation();
+    };
+    child.once("close", settle);
+    try { child.kill("SIGTERM"); } catch { settle(); return; }
+    setTimeout(() => {
+      if (child.exitCode === null) {
+        try { child.kill("SIGKILL"); } catch { /* already closed */ }
+        setTimeout(settle, 1_000);
+      } else {
+        settle();
+      }
+    }, 2_000);
+  });
+  return inspection.cancelPromise;
+}
+
 function normalizeRunOptions(raw) {
   const source = raw && typeof raw === "object" ? raw : {};
   const waitUntil = ["load", "domcontentloaded", "networkidle", "domstable", "done"].includes(source.waitUntil)
@@ -653,12 +694,12 @@ function resolveLocalPath(value) {
   return resolve(kokoDataRoot, value);
 }
 
-async function prepareRunOptions(options) {
+async function prepareRunOptions(options, inspection = activeInspection) {
   const files = {};
-  if (!activeInspection) return files;
-  await mkdir(activeInspection.optionsDirectory, { recursive: true });
-  files.html = resolve(activeInspection.optionsDirectory, "site.html");
-  files.probe = resolve(activeInspection.optionsDirectory, "probe.js");
+  if (!inspection || inspection.cancelRequested) return files;
+  await mkdir(inspection.optionsDirectory, { recursive: true });
+  files.html = resolve(inspection.optionsDirectory, "site.html");
+  files.probe = resolve(inspection.optionsDirectory, "probe.js");
   const probe = await readFile(probeBundle, "utf8");
   const probeOptions = JSON.stringify({ accessibilityAudit: options.accessibilityAudit !== false });
   // The config must precede the bundled probe because Core evaluates the
@@ -675,26 +716,27 @@ async function prepareRunOptions(options) {
   return files;
 }
 
-function runCoreInspection(url, replay, options = activeInspection?.options ?? DEFAULT_RUN_OPTIONS) {
+function runCoreInspection(url, replay, options = activeInspection?.options ?? DEFAULT_RUN_OPTIONS, inspection = activeInspection) {
+  if (!inspection) return Promise.reject(new Error("No active inspection"));
   const args = [
     "fetch", "--dump", "markdown", "--wait-until", options.waitUntil,
     "--wait-ms", String(options.waitMs),
     "--observe-ms", String(options.observeMs),
-    "--internet-journey-file", activeInspection.telemetryFile,
+    "--internet-journey-file", inspection.telemetryFile,
     // Observatory is an explicit local inspection surface, so it opts into
     // bounded text/JSON bodies without requiring users to manage an env var.
     "--telemetry-capture-bodies",
     // Controlled executions must not inherit an old profile HTTP cache: a
     // 304 has no response body and therefore cannot be replayed safely.
-    "--user-data-dir", activeInspection.browserDataDirectory,
-    "--execution-checkpoint-dir", activeInspection.checkpointDirectory,
+    "--user-data-dir", inspection.browserDataDirectory,
+    "--execution-checkpoint-dir", inspection.checkpointDirectory,
   ];
   if (options.terminateMs > 0) args.push("--terminate-ms", String(options.terminateMs));
   if (options.expandLazy) {
     args.push("--expand-lazy", "--max-scrolls", String(options.maxScrolls), "--scroll-settle-ms", String(options.scrollSettleMs));
   }
   if (options.includeFrames) args.push("--with-frames");
-  const optionFilesPromise = prepareRunOptions(options);
+  const optionFilesPromise = prepareRunOptions(options, inspection);
   let htmlFile = "";
   const appendOptions = async () => {
     const files = await optionFilesPromise;
@@ -713,16 +755,22 @@ function runCoreInspection(url, replay, options = activeInspection?.options ?? D
     args.push("--execution-restore-dir", replay.restoreDirectory, "--execution-replay-file", replay.policyFile);
   }
   return appendOptions().then(() => new Promise((resolveInspection, rejectInspection) => {
+      if (inspection.cancelRequested) {
+        rejectInspection(new Error("Inspection cancelled before Core started"));
+        return;
+      }
       args.push(url);
       const child = spawn(kokoBinary, args, {
         cwd: kokoDataRoot,
         env: process.env,
         stdio: ["ignore", "pipe", "inherit"],
       });
+      inspection.child = child;
       let markdown = "";
       child.stdout.on("data", (chunk) => { markdown += chunk.toString("utf8"); });
       child.once("error", rejectInspection);
       child.once("close", (code, signal) => {
+        inspection.child = undefined;
         if (code === 0 && !signal) {
           readFile(htmlFile, "utf8")
             .then((html) => resolveInspection({ markdown, html }))
@@ -1044,6 +1092,7 @@ function emitInspectionState(state, error, message) {
       executionParentId: activeInspection.parentExecutionId,
       requestedUrl: activeInspection.requestedUrl,
       inspectionState: state,
+      executionStatus: state === "completed" ? "completed" : state === "failed" ? "failed" : state === "cancelled" ? "cancelled" : "recording",
       errorCode,
       errorMessage: message,
       runOptions: activeInspection.options ? {

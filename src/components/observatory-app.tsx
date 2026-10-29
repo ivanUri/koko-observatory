@@ -114,8 +114,19 @@ function ObservatoryRuntime({ initialPlugin }: { initialPlugin: string }) {
       if (snapshot.events.some((event) => event.name === "site-export-ready")) {
         useExportStore.getState().setProgress(undefined);
       }
-      const terminal = snapshot.events.find((event) => event.payload.inspectionState === "completed" || event.payload.inspectionState === "failed");
-      if (terminal) useUIStore.getState().setInspecting(false);
+      const started = snapshot.events.find((event) => event.payload.inspectionState === "started");
+      const startedId = started?.payload.inspectionId;
+      if (typeof startedId === "string") useUIStore.getState().setActiveInspectionId(startedId);
+      const activeInspectionId = useUIStore.getState().activeInspectionId;
+      const terminal = snapshot.events.find((event) => {
+        const state = event.payload.inspectionState;
+        const executionId = event.payload.inspectionId ?? event.payload.executionId;
+        return (state === "completed" || state === "failed" || state === "cancelled") && typeof activeInspectionId === "string" && executionId === activeInspectionId;
+      });
+      if (terminal) {
+        useUIStore.getState().setInspecting(false);
+        useUIStore.getState().setActiveInspectionId(undefined);
+      }
     });
     const unsubscribeRaw = observatoryBus.on("raw", (events) => {
       useInternetJourneyStore.getState().ingest(events);
@@ -232,7 +243,7 @@ function GlobalInspector() {
   }, [settingsDefaults]);
   const submit = (event: React.FormEvent) => {
     event.preventDefault();
-    if (!url.trim() || inspecting) return;
+    if (!url.trim()) return;
     useBrowserJourneyStore.getState().reset();
     useInternetJourneyStore.getState().setInputUrl(url);
     if (useInternetJourneyStore.getState().phase === "error") {
@@ -267,7 +278,7 @@ function GlobalInspector() {
       <Globe2 size={14} />
       <input value={url} onChange={(event) => setUrl(event.target.value)} aria-label="Global URL to inspect" placeholder="https://example.com" />
       <button type="button" className="global-inspector__advanced-toggle" onClick={() => setAdvancedOpen((open) => !open)} aria-expanded={advancedOpen}><SlidersHorizontal size={13} />Advanced<ChevronDown size={13} className={advancedOpen ? "global-inspector__chevron global-inspector__chevron--open" : "global-inspector__chevron"} /></button>
-      <button type="submit" disabled={inspecting}>{observingRuntime ? "Observing…" : inspecting ? "Inspecting…" : "Inspect URL"}</button>
+      <button type="submit" disabled={!url.trim()}>{observingRuntime ? "Inspect next URL" : inspecting ? "Replace inspection" : "Inspect URL"}</button>
     </div>
     {advancedOpen && <section className="global-inspector__advanced" aria-label="Advanced inspection options">
       <header><div><strong>Advanced run options</strong><span>Shared values stay in sync with Settings and apply to the next run.</span></div><button type="button" className="global-inspector__reset" onClick={() => setOptions((current) => ({ ...current, ...settingsDefaults }))}>Reset</button></header>

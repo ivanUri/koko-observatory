@@ -65,7 +65,7 @@ export function metricCategory(event: TelemetryEvent): MetricCategory | undefine
   const browserStage = typeof event.payload.browserStage === "string" ? event.payload.browserStage : undefined;
   if (browserStage === "javascript") return "javascript";
   if (browserStage === "dom" || browserStage === "mutations") return "dom";
-  if (browserStage === "event-loop" || browserStage === "scheduler") return "scheduler";
+  if (browserStage === "event-loop" || browserStage === "scheduler" || browserStage === "animation-frame") return "scheduler";
   if (["style", "layout", "paint", "layers", "raster", "composite", "frame", "present"].includes(browserStage ?? "")) return "render";
   if (browserStage) return undefined;
   if (event.kind === "network") return "network";

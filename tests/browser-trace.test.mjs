@@ -53,6 +53,8 @@ test("browser journey accepts only explicit Core stages", () => {
   assert.equal(browserNodeIdForEvent(event({ kind: "render", name: "web-vital", payload: { probe: true } })), undefined);
   assert.equal(browserNodeIdForEvent(event({ kind: "render", name: "web-vital", payload: {} })), undefined);
   assert.equal(browserNodeIdForEvent(event({ kind: "render", name: "paint", payload: { browserStage: "paint" } })), undefined);
+  assert.equal(browserNodeIdForEvent(event({ kind: "render", name: "animation-frame", payload: { browserStage: "animation-frame" } })), "event-loop");
+  assert.equal(browserNodeIdForEvent(event({ kind: "render", name: "document-complete", payload: { browserStage: "document-complete" } })), "document-complete");
   assert.equal(browserNodeIdForEvent(event({ kind: "render", name: "frame", payload: { browserStage: "frame" } })), "document-complete");
   assert.equal(browserNodeIdForEvent(event({ kind: "network", name: "response", payload: { journeyStage: "response" } })), "response");
 });

@@ -34,6 +34,7 @@ test("excludes unavailable and boundary durations from measured metrics", () => 
 test("uses browserStage for latency category attribution", () => {
   assert.equal(metricCategory(event({ payload: { browserStage: "javascript", measurementState: "measured" } })), "javascript");
   assert.equal(metricCategory(event({ payload: { browserStage: "dom", measurementState: "measured" } })), "dom");
+  assert.equal(metricCategory(event({ payload: { browserStage: "animation-frame", measurementState: "measured" } })), "scheduler");
   assert.equal(metricCategory(event({ payload: { browserStage: "layout", measurementState: "measured" } })), "render");
   assert.equal(metricCategory(event({ payload: { browserStage: "html-parser", measurementState: "measured" } })), undefined);
   assert.equal(metricCategory(event({ kind: "network", payload: {} })), "network");

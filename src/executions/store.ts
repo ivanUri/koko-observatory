@@ -62,7 +62,7 @@ export const useExecutionStore = create<ExecutionState>((set, get) => ({
         schemaVersion: 1,
         rootExecutionId: previous?.rootExecutionId ?? id,
         sourceSessionIds: [...new Set([...(previous?.sourceSessionIds ?? []), event.sessionId])],
-        status: executionStatusFor(event) ?? (event.payload.inspectionState === "completed" ? "completed" : event.payload.inspectionState === "failed" ? "failed" : previous?.status ?? "recording"),
+        status: executionStatusFor(event) ?? (event.payload.inspectionState === "completed" ? "completed" : event.payload.inspectionState === "failed" ? "failed" : event.payload.inspectionState === "cancelled" ? "cancelled" : previous?.status ?? "recording"),
         fidelity: previous?.fidelity ?? "playback-only",
         capabilities: [...capabilities],
         startedAt: Math.min(previous?.startedAt ?? event.timestamp, event.timestamp),
