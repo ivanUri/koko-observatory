@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowDown, ChevronLeft, ChevronRight, CirclePause, CirclePlay, Copy, Download, Search, Trash2 } from "lucide-react";
 import type { TelemetryEvent, TelemetryKind } from "@/src/core/types";
+import { eventIdFromSearch } from "@/src/core/evidence-links";
 import { useSelectionStore, useTelemetryStore } from "@/src/stores";
 
 const Monaco = dynamic(() => import("@monaco-editor/react"), {
@@ -20,6 +21,10 @@ export function InspectorPanel() {
   const [kind, setKind] = useState<"all" | TelemetryKind>("all");
   const [view, setView] = useState<"overview" | "payload" | "raw">("overview");
   const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    const eventId = eventIdFromSearch(window.location.search);
+    if (eventId && events.some((event) => event.id === eventId)) select(eventId);
+  }, [events, select]);
   const selected = events.find((event) => event.id === selectedId) ?? events.at(-1);
   const filtered = useMemo(() => events.filter((event) => {
     if (kind !== "all" && event.kind !== kind) return false;

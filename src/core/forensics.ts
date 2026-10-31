@@ -4,6 +4,25 @@ import { aggregateNetworkRequests } from "./network-metrics.ts";
 
 export type ForensicSeverity = "critical" | "warning" | "info";
 export type ForensicCategory = "reliability" | "network" | "runtime" | "experience";
+export type ForensicConfidence = "direct" | "measured";
+export type ForensicEvidenceDestination = "network" | "inspector" | "timeline";
+
+export interface ForensicEvidence {
+  eventId: string;
+  role: "primary" | "context";
+  kind: TelemetryEvent["kind"];
+  destination: ForensicEvidenceDestination;
+  requestId?: string;
+  frameId?: number;
+  loaderId?: number;
+  url?: string;
+}
+
+export interface ForensicMeasurement {
+  value: number;
+  unit: "ms" | "bytes" | "score";
+  threshold?: number;
+}
 
 export interface RuntimeFinding {
   id: string;
@@ -12,8 +31,16 @@ export interface RuntimeFinding {
   title: string;
   summary: string;
   evidenceIds: string[];
+  evidence: ForensicEvidence[];
+  confidence: ForensicConfidence;
+  scope: ForensicScope;
+  measurement?: ForensicMeasurement;
   value?: string;
 }
+
+type RuntimeFindingDraft = Omit<RuntimeFinding, "evidence" | "confidence" | "scope"> & {
+  confidence: ForensicConfidence;
+};
 
 export type BottleneckLayer = "reliability" | "network" | "runtime" | "experience" | "none";
 
@@ -67,6 +94,8 @@ const runtimeThresholds: Record<string, number> = {
   render: 300,
 };
 
+const largeResourceThreshold = 1024 * 1024;
+
 /**
  * Produce actionable findings from direct Core/probe measurements only.
  * This intentionally does not infer a root cause from event order or timing
@@ -89,7 +118,7 @@ export function diagnoseRuntime(events: TelemetryEvent[]): RuntimeForensicsRepor
     };
   }
 
-  const findings: RuntimeFinding[] = [];
+  const findings: RuntimeFindingDraft[] = [];
   const inspectionFailure = [...scopedEvents].reverse().find((event) => event.payload.inspectionState === "failed");
   if (inspectionFailure) {
     findings.push({
@@ -99,18 +128,27 @@ export function diagnoseRuntime(events: TelemetryEvent[]): RuntimeForensicsRepor
       title: "Inspection failed",
       summary: String(inspectionFailure.payload.errorMessage ?? inspectionFailure.payload.errorCode ?? "Core reported an inspection failure."),
       evidenceIds: [inspectionFailure.id],
+      confidence: "direct",
     });
   }
 
-  const errors = scopedEvents.filter((event) => event.status === "error" && event.kind !== "network");
+  const errors = scopedEvents.filter((event) => event.status === "error"
+    && event.kind !== "network"
+    && event.id !== inspectionFailure?.id
+    && event.payload.inspectionState == null);
   if (errors.length) {
+    const latest = errors.at(-1)!;
+    const message = stringPayload(latest.payload.message) ?? stringPayload(latest.payload.errorMessage);
     findings.push({
       id: "runtime-errors",
       severity: "critical",
       category: "reliability",
       title: `${errors.length} runtime error${errors.length === 1 ? "" : "s"} observed`,
-      summary: "Core marked these signals as errors. Open the evidence instead of treating them as a guessed root cause.",
+      summary: message
+        ? `${message}${stringPayload(latest.payload.scriptUrl) ? ` (${String(latest.payload.scriptUrl)})` : ""}. Core emitted this as a direct runtime error.`
+        : "Core marked these signals as errors. Open the evidence instead of treating them as a guessed root cause.",
       evidenceIds: errors.slice(-8).map((event) => event.id),
+      confidence: "direct",
     });
   }
 
@@ -125,6 +163,7 @@ export function diagnoseRuntime(events: TelemetryEvent[]): RuntimeForensicsRepor
       title: `${httpErrors.length} HTTP error request${httpErrors.length === 1 ? "" : "s"}`,
       summary: `${String(latest.statusCode)} returned for ${latest.url}. Each request is counted once using its request ID, not once per network stage.`,
       evidenceIds: httpErrors.slice(-8).flatMap(requestEvidenceIds),
+      confidence: "direct",
       value: String(latest.statusCode),
     });
   }
@@ -142,6 +181,26 @@ export function diagnoseRuntime(events: TelemetryEvent[]): RuntimeForensicsRepor
       title: `${transportErrors.length} network transfer failure${transportErrors.length === 1 ? "" : "s"}`,
       summary: `${latest.failure ?? "The transfer ended before a successful response."} (${latest.url}).`,
       evidenceIds: transportErrors.slice(-8).flatMap(requestEvidenceIds),
+      confidence: "direct",
+    });
+  }
+
+  const largeResource = networkRequests
+    .map((request) => ({ request, bytes: request.decodedBytes ?? request.transferredBytes }))
+    .filter((item): item is { request: typeof networkRequests[number]; bytes: number } => item.bytes != null && item.bytes >= largeResourceThreshold)
+    .sort((left, right) => right.bytes - left.bytes)[0];
+  if (largeResource) {
+    const sizeKind = largeResource.request.decodedBytes != null ? "decoded" : "transferred";
+    findings.push({
+      id: "large-resource",
+      severity: "warning",
+      category: "network",
+      title: "Large resource observed",
+      summary: `Core measured ${formatBytes(largeResource.bytes)} of ${sizeKind} data for ${largeResource.request.url}. This reports the largest measured request, not an estimate.`,
+      evidenceIds: requestEvidenceIds(largeResource.request),
+      confidence: "measured",
+      measurement: { value: largeResource.bytes, unit: "bytes", threshold: largeResourceThreshold },
+      value: formatBytes(largeResource.bytes),
     });
   }
 
@@ -159,6 +218,8 @@ export function diagnoseRuntime(events: TelemetryEvent[]): RuntimeForensicsRepor
       title: `Slowest ${stage} stage observed`,
       summary: `Core measured ${formatDuration(event.duration)} in the ${stage} stage for ${String(event.payload.url ?? "the request")}. This is a measured bottleneck candidate, not an inferred root cause.`,
       evidenceIds: [event.id],
+      confidence: "measured",
+      measurement: { value: event.duration, unit: "ms", threshold: networkThresholds[stage] },
       value: formatDuration(event.duration),
     });
   }
@@ -175,14 +236,16 @@ export function diagnoseRuntime(events: TelemetryEvent[]): RuntimeForensicsRepor
       title: `Long ${slowRuntime.category} stage observed`,
       summary: runtimeFindingSummary(slowRuntime.event),
       evidenceIds: [slowRuntime.event.id],
+      confidence: "measured",
+      measurement: { value: slowRuntime.event.duration, unit: "ms", threshold: runtimeThresholds[slowRuntime.category] },
       value: formatDuration(slowRuntime.event.duration),
     });
   }
 
   findings.push(...lifecycleFindings(scopedEvents));
   findings.push(...vitalFindings(scopedEvents));
-  findings.sort((left, right) => severityRank(left.severity) - severityRank(right.severity));
-  const limitedFindings = findings.slice(0, 5);
+  findings.sort(compareFindingPriority);
+  const limitedFindings = findings.slice(0, 5).map((finding) => materializeFinding(finding, scopedEvents, scope));
   const state = limitedFindings.some((finding) => finding.severity === "critical" || finding.severity === "warning") ? "attention" : "healthy";
   return {
     state,
@@ -247,15 +310,25 @@ function buildBottleneckReport(events: TelemetryEvent[], findings: RuntimeFindin
   };
 }
 
-function compareFindingPriority(left: RuntimeFinding, right: RuntimeFinding) {
+function compareFindingPriority(left: RuntimeFindingDraft | RuntimeFinding, right: RuntimeFindingDraft | RuntimeFinding) {
   const severity = severityRank(left.severity) - severityRank(right.severity);
   if (severity) return severity;
+  const explicitPriority: Record<string, number> = {
+    "inspection-failed": 0,
+    "runtime-errors": 1,
+    "http-errors": 2,
+    "network-failures": 3,
+    "lifecycle-not-reached": 4,
+  };
+  const priority = (explicitPriority[left.id] ?? 100) - (explicitPriority[right.id] ?? 100);
+  if (priority) return priority;
   const breach = findingBreachScore(right) - findingBreachScore(left);
   if (breach) return breach;
   return left.id.localeCompare(right.id);
 }
 
-function findingBreachScore(finding: RuntimeFinding) {
+function findingBreachScore(finding: RuntimeFindingDraft | RuntimeFinding) {
+  if (finding.measurement?.threshold) return finding.measurement.value / finding.measurement.threshold;
   if (!finding.value) return 0;
   const value = Number.parseFloat(finding.value);
   if (!Number.isFinite(value)) return 0;
@@ -267,6 +340,35 @@ function findingBreachScore(finding: RuntimeFinding) {
   if (finding.id === "vital-inp") return value / 500;
   if (finding.id === "vital-cls") return value / .25;
   return 0;
+}
+
+function materializeFinding(finding: RuntimeFindingDraft, events: TelemetryEvent[], scope: ForensicScope): RuntimeFinding {
+  const eventById = new Map(events.map((event) => [event.id, event]));
+  const evidence = [...new Set(finding.evidenceIds)].flatMap((eventId, index) => {
+    const event = eventById.get(eventId);
+    if (!event) return [];
+    const requestId = event.payload.requestId == null ? undefined : String(event.payload.requestId);
+    const frameId = numberPayload(event.payload.frameId);
+    const loaderId = numberPayload(event.payload.loaderId);
+    const url = stringPayload(event.payload.url) ?? stringPayload(event.payload.scriptUrl);
+    return [{
+      eventId,
+      role: index === 0 ? "primary" as const : "context" as const,
+      kind: event.kind,
+      destination: evidenceDestination(event),
+      ...(requestId ? { requestId } : {}),
+      ...(frameId != null ? { frameId } : {}),
+      ...(loaderId != null ? { loaderId } : {}),
+      ...(url ? { url } : {}),
+    }];
+  });
+  return { ...finding, evidenceIds: evidence.map((item) => item.eventId), evidence, scope };
+}
+
+function evidenceDestination(event: TelemetryEvent): ForensicEvidenceDestination {
+  if (event.kind === "network") return "network";
+  if (event.payload.inspectionState != null || event.payload.lifecycleStage != null || event.kind === "navigation") return "timeline";
+  return "inspector";
 }
 
 function bottleneckChain(events: TelemetryEvent[], finding: RuntimeFinding): BottleneckStep[] {
@@ -374,7 +476,7 @@ function requestEvidenceIds(request: { events: TelemetryEvent[] }) {
   return evidence ? [evidence.id] : [];
 }
 
-function lifecycleFindings(events: TelemetryEvent[]): RuntimeFinding[] {
+function lifecycleFindings(events: TelemetryEvent[]): RuntimeFindingDraft[] {
   const completed = [...events].reverse().find((event) => event.payload.inspectionState === "completed");
   if (!completed) return [];
   const runOptions = completed.payload.runOptions as Record<string, unknown> | undefined;
@@ -390,10 +492,11 @@ function lifecycleFindings(events: TelemetryEvent[]): RuntimeFinding[] {
     title: `${expected} milestone not observed`,
     summary: `The inspection completed, but Core did not emit the configured ${expected} lifecycle milestone. Treat later-page timing as incomplete.`,
     evidenceIds: [completed.id],
+    confidence: "direct",
   }];
 }
 
-function vitalFindings(events: TelemetryEvent[]): RuntimeFinding[] {
+function vitalFindings(events: TelemetryEvent[]): RuntimeFindingDraft[] {
   const latest = new Map<string, { value: number; event: TelemetryEvent }>();
   for (const event of events) {
     if (event.name !== "web-vital" || typeof event.payload.probeJson !== "string") continue;
@@ -418,6 +521,8 @@ function vitalFindings(events: TelemetryEvent[]): RuntimeFinding[] {
     title: `${budgets[name].label} exceeds the diagnostic budget`,
     summary: `${budgets[name].label} was measured at ${name === "CLS" ? item.value.toFixed(3) : formatDuration(item.value)} by the page probe.`,
     evidenceIds: [item.event.id],
+    confidence: "measured" as const,
+    measurement: { value: item.value, unit: name === "CLS" ? "score" as const : "ms" as const, threshold: budgets[name].threshold },
     value: name === "CLS" ? item.value.toFixed(3) : formatDuration(item.value),
   }));
 }
@@ -436,4 +541,9 @@ function severityRank(severity: ForensicSeverity) {
 
 function formatDuration(value: number) {
   return value >= 1_000 ? `${(value / 1_000).toFixed(2)} s` : `${value.toFixed(1)} ms`;
+}
+
+function formatBytes(value: number) {
+  if (value >= 1024 * 1024) return `${(value / (1024 * 1024)).toFixed(2)} MiB`;
+  return `${(value / 1024).toFixed(1)} KiB`;
 }

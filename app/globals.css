@@ -2467,6 +2467,46 @@
 .reverse-control-grid .primary-button { height: 34px; white-space: nowrap; }
 .reverse-session-meta { display: flex; flex-direction: column; gap: 3px; border-top: 1px solid #1d3038; padding-top: 11px; color: #d4e6e2; }
 .reverse-session-meta small { color: #78908f; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.reverse-security-controls { display: grid; grid-template-columns: minmax(280px, 1fr) auto; align-items: center; gap: 8px 16px; border-top: 1px solid #1d3038; padding-top: 12px; }
+.reverse-security-controls > label { display: flex; align-items: center; gap: 8px; color: #b8ceca; font-size: 11px; }
+.reverse-security-controls > label input { accent-color: #65d5a1; }
+.reverse-security-controls > div { display: flex; gap: 7px; }
+.reverse-security-controls > div input { width: 150px; height: 32px; border: 1px solid #29414a; border-radius: 3px; background: #07151b; color: #d8ece7; padding: 0 9px; }
+.reverse-security-controls button { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.reverse-security-controls > small { grid-column: 1 / -1; color: #708684; font-size: 10px; line-height: 1.5; }
+.js-security-panel { margin-top: 14px; overflow: hidden; }
+.js-security-state { border: 1px solid #36534e; padding: 4px 7px; color: #8bbab1; font: 9px var(--font-jetbrains), monospace; }
+.js-security-state--attention { border-color: #875c35; color: #f0b16b; }
+.js-security-state--running { border-color: #326b72; color: #6fd2dc; }
+.js-security-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border-top: 1px solid #1b3037; border-bottom: 1px solid #1b3037; }
+.js-security-summary > span { display: grid; gap: 2px; padding: 12px 14px; color: #718886; font-size: 10px; }
+.js-security-summary > span + span { border-left: 1px solid #1b3037; }
+.js-security-summary strong { color: #d4e8e1; font: 18px var(--font-jetbrains), monospace; }
+.js-security-tools { display: flex; flex-wrap: wrap; gap: 7px; padding: 10px 14px; border-bottom: 1px solid #1b3037; }
+.js-security-tool { display: inline-flex; gap: 6px; border: 1px solid #31464b; padding: 4px 6px; color: #80938f; font: 9px var(--font-jetbrains), monospace; }
+.js-security-tool--completed { border-color: #35634f; color: #7fd1a2; }
+.js-security-tool--failed { border-color: #76443c; color: #df8f80; }
+.js-security-layout { display: grid; grid-template-columns: minmax(250px, .8fr) minmax(360px, 1.2fr); min-height: 300px; }
+.js-security-findings { max-height: 410px; overflow: auto; border-right: 1px solid #1b3037; }
+.js-security-findings button { display: grid; grid-template-columns: auto 1fr; gap: 4px 8px; width: 100%; border: 0; border-bottom: 1px solid #192d35; background: transparent; color: #becfcb; padding: 10px 12px; text-align: left; cursor: pointer; }
+.js-security-findings button:hover, .js-security-findings button.active { background: #0c2329; }
+.js-security-findings button > strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.js-security-findings button > small { grid-column: 2; color: #738783; font: 9px var(--font-jetbrains), monospace; }
+.js-security-severity { align-self: start; border: 1px solid #73502d; padding: 2px 4px; color: #e8ad62; font: 8px var(--font-jetbrains), monospace; text-transform: uppercase; }
+.js-security-severity--critical, .js-security-severity--high { border-color: #7d3f3f; color: #ed8e83; }
+.js-security-severity--low, .js-security-severity--info { border-color: #365b60; color: #79bbc0; }
+.js-security-detail { min-width: 0; padding: 16px; }
+.js-security-detail header { display: flex; align-items: center; gap: 9px; color: #d7e5e1; }
+.js-security-detail p { color: #91a4a0; line-height: 1.55; }
+.js-security-detail dl { display: grid; gap: 1px; margin: 14px 0; background: #172a31; }
+.js-security-detail dl > div { display: grid; grid-template-columns: 120px minmax(0, 1fr); gap: 12px; background: #09191f; padding: 8px 10px; }
+.js-security-detail dt { color: #718784; font-size: 10px; }
+.js-security-detail dd { margin: 0; color: #bfd2cd; font: 10px var(--font-jetbrains), monospace; overflow-wrap: anywhere; }
+.js-security-actions { display: flex; gap: 8px; }
+.js-security-actions a { border: 1px solid #31514d; padding: 6px 8px; color: #80c7b2; text-decoration: none; font-size: 10px; }
+.js-security-empty { display: grid; gap: 5px; padding: 24px 16px; color: #94a7a3; }
+.js-security-empty strong { color: #c7d9d4; }
+.js-security-limit { border-top: 1px solid #1b3037; padding: 9px 14px; color: #6f8280; font-size: 9px; }
 .reverse-summary { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .reverse-layout { display: grid; grid-template-columns: minmax(240px, .8fr) minmax(300px, 1.2fr); gap: 14px; align-items: start; }
 .reverse-evidence-card, .reverse-graph-card, .reverse-source-card { min-height: 290px; overflow: hidden; }
@@ -2490,8 +2530,8 @@
 .reverse-limitations { margin-top: 14px; }
 .reverse-limitations ul { margin: 0; padding: 0 18px 15px 34px; color: #98aaa8; }
 .reverse-limitations li { margin: 7px 0; }
-@media (max-width: 1100px) { .reverse-control-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
-@media (max-width: 720px) { .reverse-layout { grid-template-columns: 1fr; } .reverse-source-card { grid-column: auto; } .reverse-summary { grid-template-columns: 1fr 1fr; } .reverse-control-grid { grid-template-columns: 1fr 1fr; } .reverse-control-grid label:last-of-type, .reverse-control-grid .primary-button { grid-column: 1 / -1; } }
+@media (max-width: 1100px) { .reverse-control-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } .js-security-layout { grid-template-columns: 1fr; } .js-security-findings { border-right: 0; border-bottom: 1px solid #1b3037; } }
+@media (max-width: 720px) { .reverse-layout { grid-template-columns: 1fr; } .reverse-source-card { grid-column: auto; } .reverse-summary, .js-security-summary { grid-template-columns: 1fr 1fr; } .reverse-control-grid { grid-template-columns: 1fr 1fr; } .reverse-control-grid label:last-of-type, .reverse-control-grid .primary-button { grid-column: 1 / -1; } .reverse-security-controls { grid-template-columns: 1fr; } .reverse-security-controls > small { grid-column: auto; } }
 
 .toolbar {
   display: flex;

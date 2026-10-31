@@ -15,6 +15,7 @@ import { bucketEventRate, eventsPerSecond, metricCategory, percentile, isMeasure
 import { aggregateNetworkRequests, matchesNetworkType, networkStageOrder, type NetworkRequestSummary } from "@/src/core/network-metrics";
 import { downloadChromeTrace } from "@/src/core/trace";
 import { diagnoseRuntime } from "@/src/core/forensics";
+import { eventIdFromSearch } from "@/src/core/evidence-links";
 import { RuntimeForensicsPanel } from "@/src/components/runtime-forensics-panel";
 
 const ExecutionGraph = dynamic(
@@ -360,6 +361,10 @@ export function TimelinePanel() {
   const [status, setStatus] = useState("all");
   const [journey, setJourney] = useState("all");
   const [session, setSession] = useState("all");
+  useEffect(() => {
+    const eventId = eventIdFromSearch(window.location.search);
+    if (eventId && events.some((event) => event.id === eventId)) select(eventId);
+  }, [events, select]);
   const sessions = useMemo(() => [...new Set(events.map((event) => event.sessionId))], [events]);
   const filtered = useMemo(() => events.filter((event) => {
     const eventJourney = classifyJourney(event);

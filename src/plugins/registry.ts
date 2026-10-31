@@ -13,6 +13,8 @@ import { SettingsPanel } from "@/src/components/settings-panel";
 import { AutomationPanel } from "@/src/components/automation-panel";
 import { PageReplayPanel } from "@/src/components/page-replay-panel";
 import { ReverseInspectorPanel } from "@/src/components/reverse-inspector-panel";
+import { SecurityEvidencePanel } from "@/src/components/security-evidence-panel";
+import { ShieldAlert } from "lucide-react";
 
 export const plugins: ObservatoryPlugin[] = [
   { id: "overview", route: "/", label: "Overview", description: "Runtime health and metrics", icon: Activity, component: OverviewPanel },
@@ -26,6 +28,7 @@ export const plugins: ObservatoryPlugin[] = [
   { id: "page-replay", route: "/page-replay", label: "Page Replay", description: "rrweb DOM session playback", icon: MonitorPlay, component: PageReplayPanel, badge: "New" },
   { id: "automation", route: "/automation", label: "Automation", description: "Build live browser workflows", icon: WandSparkles, component: AutomationPanel, badge: "New" },
   { id: "reverse", route: "/reverse", label: "Reverse Inspector", description: "Evidence-backed web behavior tracing", icon: Waypoints, component: ReverseInspectorPanel, badge: "New" },
+  { id: "security-evidence", route: "/security-evidence", label: "Security Evidence", description: "Technology and advisory evidence", icon: ShieldAlert, component: SecurityEvidencePanel, badge: "New" },
   { id: "inspector", route: "/inspector", label: "Event inspector", description: "Structured payload editor", icon: Braces, component: InspectorPanel },
   { id: "console", route: "/console", label: "Console", description: "Runtime diagnostics", icon: TerminalSquare, component: ConsolePanel },
   { id: "application", route: "/application", label: "Application", description: "Cookies and origin storage", icon: Database, component: ApplicationPanel, sidebar: false },

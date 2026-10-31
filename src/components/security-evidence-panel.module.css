@@ -1,0 +1,16 @@
+.page { display: grid; gap: 16px; }
+.page :global(.panel-card) { padding: 18px; }
+.page h2 { font-size: 15px; margin: 0 0 12px; }
+.page h2 span { color: #8db6aa; font-size: 12px; }
+.page p, .page li { color: #aab8bf; line-height: 1.55; font-size: 13px; }
+.page a { color: #6ce0b3; overflow-wrap: anywhere; }
+.page select { margin-left: 8px; background: #10222c; color: #e0edf0; padding: 7px; border: 1px solid #35515a; }
+.finding, .fingerprint { padding: 14px; border: 1px solid #35515a; background: #0b171d; margin: 10px 0; }
+.finding { border-left: 3px solid #ef8f77; }
+.finding > div, .fingerprint { display: grid; gap: 6px; }
+.finding span, .fingerprint > span { color: #e7aa8a; font-size: 11px; }
+.evidence { padding: 0; list-style: none; display: grid; gap: 6px; }
+.evidence li { display: flex; justify-content: space-between; gap: 12px; padding: 8px; background: #111f27; min-width: 0; }
+.evidence li div { min-width: 0; overflow-wrap: anywhere; }
+.evidence li small { display: block; color: #8da5af; }
+.evidence code { overflow-wrap: anywhere; }

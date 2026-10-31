@@ -25,6 +25,14 @@ test("forensics reports the measured slow network stage with its evidence id", (
   assert.equal(report.state, "attention");
   assert.equal(report.findings[0].id, "slow-network-stage");
   assert.deepEqual(report.findings[0].evidenceIds, ["server-1"]);
+  assert.equal(report.findings[0].confidence, "measured");
+  assert.deepEqual(report.findings[0].evidence[0], {
+    eventId: "server-1",
+    role: "primary",
+    kind: "network",
+    destination: "network",
+    url: "https://example.test/",
+  });
   assert.equal(report.bottleneck.layer, "network");
   assert.match(report.bottleneck.headline, /Network bottleneck candidate/);
   assert.equal(report.bottleneck.chain[1].evidenceIds[0], "server-1");
@@ -133,4 +141,49 @@ test("forensics ignores Web Vitals emitted by a child frame", () => {
   ]);
   assert.equal(report.findings.length, 0);
   assert.equal(report.state, "healthy");
+});
+
+test("forensics does not duplicate an inspection failure as a runtime error", () => {
+  const report = diagnoseRuntime([event("inspection-error", {
+    kind: "log",
+    status: "error",
+    payload: { inspectionState: "failed", errorCode: "navigation_timeout" },
+  })]);
+  assert.deepEqual(report.findings.map((finding) => finding.id), ["inspection-failed"]);
+  assert.equal(report.findings[0].confidence, "direct");
+  assert.equal(report.findings[0].evidence[0].destination, "timeline");
+});
+
+test("forensics reports the largest measured resource without estimating bytes", () => {
+  const report = diagnoseRuntime([
+    event("large-response", {
+      kind: "network",
+      name: "response",
+      payload: {
+        executionId: "execution-large",
+        requestId: 91,
+        url: "https://example.test/app.js",
+        journeyStage: "response",
+        responseStatus: 200,
+        responseBodyBytes: 1_500_000,
+        uncompressedSizeBytes: 2_500_000,
+        responseMemoryState: "decoded_body",
+        resourceType: "Script",
+      },
+    }),
+  ]);
+  const finding = report.findings.find((item) => item.id === "large-resource");
+  assert.equal(finding?.measurement?.value, 2_500_000);
+  assert.equal(finding?.measurement?.unit, "bytes");
+  assert.equal(finding?.evidence[0].requestId, "91");
+  assert.equal(finding?.evidence[0].destination, "network");
+});
+
+test("forensics keeps explicit failures ahead of larger measured breaches", () => {
+  const report = diagnoseRuntime([
+    event("inspection-error", { kind: "log", status: "error", payload: { inspectionState: "failed", errorCode: "core_failed" } }),
+    event("very-slow-server", { kind: "network", duration: 9_000, payload: { journeyStage: "server", measurement: "measured" } }),
+  ]);
+  assert.equal(report.findings[0].id, "inspection-failed");
+  assert.equal(report.bottleneck.evidenceIds[0], "inspection-error");
 });
