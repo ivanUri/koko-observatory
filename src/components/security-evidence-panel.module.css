@@ -14,3 +14,13 @@
 .evidence li div { min-width: 0; overflow-wrap: anywhere; }
 .evidence li small { display: block; color: #8da5af; }
 .evidence code { overflow-wrap: anywhere; }
+.scanControls { display: flex; flex-wrap: wrap; gap: 16px; align-items: center; }
+.scanControls label { color: #d0dee4; font-size: 13px; }
+.scanControls code { overflow-wrap: anywhere; }
+.confirm { display: flex; align-items: center; gap: 8px; color: #d0dee4; font-size: 13px; }
+.scanActions { display: flex; gap: 10px; align-items: center; margin: 12px 0; }
+.scanActions button { border: 1px solid #3f806b; background: #183e33; color: #e2fff2; padding: 8px 12px; cursor: pointer; }
+.scanActions button:disabled { opacity: .45; cursor: not-allowed; }
+.scanActions span { color: #aab8bf; font-size: 12px; }
+.scanError { color: #ff9d91 !important; }
+.httpEvidence { max-height: 260px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; padding: 10px; background: #071119; color: #cfdee4; }

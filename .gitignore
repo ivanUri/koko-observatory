@@ -41,5 +41,6 @@ next-env.d.ts
 /.wrangler/
 /outputs/
 /work/
+/.tools/
 /.sites/
 public/generated/koko-observatory-probe.js

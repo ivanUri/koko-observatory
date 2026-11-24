@@ -48,6 +48,54 @@ Open the local URL printed by Next.js (typically `http://localhost:3000`).
 
 Observatory consumes Koko telemetry over WebSocket. Set the endpoint before starting the UI:
 
+## Product surfaces
+
+- Realtime runtime overview using incremental Apache ECharts updates.
+- Windowed event timeline and request explorer.
+- React Flow execution graph with custom nodes, minimap, animated edges, and
+  layout selection.
+- Deterministic replay surface for versioned Action Journal workflows.
+- Monaco-based structured event inspector.
+- xterm.js runtime console.
+- Export workspace for captured site HTML, Markdown, and JSON artifacts.
+- Global inspector advanced run options for wait strategy, deadlines, selectors,
+  wait scripts, User-Agent, fixed headers, and cookie JSON import.
+
+## Nuclei active scans
+
+Install [Nuclei](https://docs.projectdiscovery.io/opensource/nuclei/install)
+and its community templates on the host running the telemetry bridge. The
+bridge locates `nuclei` in PATH, `./.tools/bin/nuclei`, or the executable named
+by `KOKO_NUCLEI_BINARY`. Install or update templates with `nuclei -ut` before
+starting Observatory; scans disable automatic template update checks. Set
+`KOKO_NUCLEI_TEMPLATES_DIR` to the community templates root when using a
+non-default template installation. `./.tools/nuclei-templates` is also
+detected automatically when present.
+
+Inspect a URL, open **Security Evidence**, select that execution and an HTTP
+template profile, confirm authorization, and start the scan. Profiles cover
+community technology, exposure, or CVE templates. These make new requests and
+are not passive inspection; templates may have side effects or contact endpoints
+outside the target. Redirects and Interactsh are disabled, and scans are bounded
+to 5 requests per second, 2 concurrent templates, 120 seconds and 500 findings.
+The UI retains the template ID, matcher metadata, target URL without query
+parameters and reference links. Request/response excerpts are opt-in, capped
+at 16 KB each and stored in local telemetry. Common credential headers and
+request query strings are redacted; other sensitive body data may remain.
+Extracted values are not retained. A template match is not automatically proof
+of exploitation.
+
+The bridge's Nuclei commands reject browser origins other than localhost or
+loopback. As with the existing local bridge, only run it in a trusted local
+environment; local clients without a browser Origin can issue commands.
+
+## Architecture
+
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
+The telemetry bridge forwards completed runtime records over WebSocket. Set
+`NEXT_PUBLIC_KOKO_TELEMETRY_URL` when the Observatory is started, for example:
+
 ```bash
 NEXT_PUBLIC_KOKO_TELEMETRY_URL=ws://127.0.0.1:9223/telemetry npm run dev
 ```

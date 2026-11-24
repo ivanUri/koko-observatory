@@ -143,15 +143,18 @@ function ObservatoryRuntime({ initialPlugin }: { initialPlugin: string }) {
     const replay = (event: Event) => pipeline.send(JSON.stringify({ type: "execution.replay", ...(event as CustomEvent<Record<string, unknown>>).detail }));
     const clearExecutionData = () => pipeline.send(JSON.stringify({ type: "execution.clear-all" }));
     const automation = (event: Event) => pipeline.send(JSON.stringify((event as CustomEvent<Record<string, unknown>>).detail));
+    const nuclei = (event: Event) => pipeline.send(JSON.stringify((event as CustomEvent<Record<string, unknown>>).detail));
     window.addEventListener("koko:inspect-url", inspect);
     window.addEventListener("koko:execution-replay", replay);
     window.addEventListener("koko:clear-execution-data", clearExecutionData);
     window.addEventListener("koko:automation", automation);
+    window.addEventListener("koko:nuclei", nuclei);
     return () => {
       window.removeEventListener("koko:inspect-url", inspect);
       window.removeEventListener("koko:execution-replay", replay);
       window.removeEventListener("koko:clear-execution-data", clearExecutionData);
       window.removeEventListener("koko:automation", automation);
+      window.removeEventListener("koko:nuclei", nuclei);
       unsubscribe();
       unsubscribeStatus();
       unsubscribeExportProgress();

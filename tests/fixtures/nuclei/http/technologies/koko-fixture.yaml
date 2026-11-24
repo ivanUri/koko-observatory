@@ -1,0 +1,17 @@
+id: koko-integration-fixture
+
+info:
+  name: Koko local integration fixture
+  author: koko
+  severity: info
+  description: Matches a harmless marker served by a local test fixture.
+
+http:
+  - method: GET
+    path:
+      - "{{BaseURL}}/"
+    matchers:
+      - type: word
+        part: body
+        words:
+          - "koko-nuclei-integration-marker"

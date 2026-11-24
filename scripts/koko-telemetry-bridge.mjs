@@ -7,6 +7,7 @@ import { spawn } from "node:child_process";
 import { WebSocketServer, WebSocket } from "ws";
 import { selectDocumentResponse } from "../src/core/document-transfer.ts";
 import { REVERSE_RUNTIME_PROBE } from "../src/reverse/runtime-probe.ts";
+import { createNucleiScanner } from "./nuclei-scanner.mjs";
 
 const workspaceRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const kokoDataRoot = process.env.KOKO_DATA_ROOT ? resolve(process.env.KOKO_DATA_ROOT) : resolve(workspaceRoot, "../koko-core");
@@ -51,13 +52,26 @@ const DEFAULT_RUN_OPTIONS = Object.freeze({
   accessibilityAudit: true,
 });
 
+const nucleiScanner = createNucleiScanner({ emit: broadcastEvent });
 const server = new WebSocketServer({ host: "127.0.0.1", port, path: "/telemetry" });
-server.on("connection", (socket) => {
+server.on("connection", (socket, request) => {
   clients.add(socket);
   socket.on("close", () => clients.delete(socket));
   socket.on("message", (raw) => {
     try {
       const command = JSON.parse(raw.toString());
+      if (command?.type === "nuclei.start" || command?.type === "nuclei.stop") {
+        // Do not let an unrelated website drive active scans through the
+        // browser's access to this loopback WebSocket.
+        if (request.headers.origin) {
+          let origin;
+          try { origin = new URL(request.headers.origin); } catch { return; }
+          if (!["http:", "https:"].includes(origin.protocol) || !["localhost", "127.0.0.1", "[::1]"].includes(origin.hostname)) return;
+        }
+        if (command.type === "nuclei.start") nucleiScanner.start(command);
+        else nucleiScanner.stop(command.scanId);
+        return;
+      }
       if (command?.type === "execution.replay") {
         queueReplay(command);
         return;
